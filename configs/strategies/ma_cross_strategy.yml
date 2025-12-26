@@ -1,0 +1,150 @@
+# ============================================
+# 移動平均交叉策略配置
+# ============================================
+
+# 策略基本資訊
+strategy:
+  name: ma_cross_btcusdt
+  version: "v1.0"
+  description: "雙均線交叉策略 - BTC/USDT"
+  type: technical_indicator
+  random_seed: 42
+
+# 資料配置
+data:
+  source:
+    exchange: binance
+    symbol: BTCUSDT
+    timeframe: 1h
+    start_date: "2024-01-01T00:00:00Z"
+    end_date: "2024-12-31T23:59:59Z"
+
+  # 資料清洗版本
+  cleaning_version: "v1"
+
+# 策略參數
+parameters:
+  # 快速移動平均
+  fast_ma:
+    period: 10
+    type: sma  # sma, ema, wma
+
+  # 慢速移動平均
+  slow_ma:
+    period: 30
+    type: sma
+
+  # 進場條件
+  entry:
+    long:
+      condition: fast_ma_cross_above_slow_ma
+      confirmation_bars: 1  # 需要幾根 K 線確認
+    short:
+      enabled: false  # 是否允許做空
+
+  # 出場條件
+  exit:
+    # 止盈
+    take_profit:
+      enabled: true
+      type: percentage  # percentage, fixed
+      value: 0.05  # 5%
+
+    # 止損
+    stop_loss:
+      enabled: true
+      type: percentage
+      value: 0.02  # 2%
+
+    # 追蹤止損
+    trailing_stop:
+      enabled: false
+      type: percentage
+      value: 0.03
+
+    # 信號反轉出場
+    signal_exit:
+      enabled: true
+      condition: fast_ma_cross_below_slow_ma
+
+# 部位管理
+position_sizing:
+  method: fixed_percentage  # fixed_amount, fixed_percentage, kelly
+  value: 0.95  # 使用 95% 可用資金
+  max_position_size: 1.0  # 最大部位比例
+
+# 交易執行配置
+execution:
+  # 交易成本
+  fees:
+    maker: 0.001  # 0.1%
+    taker: 0.001  # 0.1%
+
+  # 滑價
+  slippage:
+    enabled: true
+    type: percentage
+    value: 0.0005  # 0.05%
+
+  # 最小交易金額
+  min_notional: 10.0  # USDT
+
+  # 價格精度
+  price_precision: 2
+
+  # 數量精度
+  quantity_precision: 6
+
+# 風險管理
+risk_management:
+  # 最大同時持倉數
+  max_concurrent_positions: 1
+
+  # 每日最大交易次數
+  max_trades_per_day: 10
+
+  # 最大回撤限制
+  max_drawdown: 0.20  # 20%
+
+  # 損失停止
+  daily_loss_limit: 0.05  # 單日虧損 5% 停止交易
+
+# 回測配置
+backtest:
+  # 初始資金
+  initial_capital: 10000.0
+  currency: USDT
+
+  # 回測模式
+  mode: full  # full, quick
+
+  # 預熱期（計算指標所需）
+  warmup_period: 100  # K 線數量
+
+# 績效評估指標
+performance_metrics:
+  - total_return
+  - annual_return
+  - sharpe_ratio
+  - sortino_ratio
+  - max_drawdown
+  - win_rate
+  - profit_factor
+  - total_trades
+  - avg_trade_duration
+  - avg_win
+  - avg_loss
+
+# 輸出配置
+output:
+  results_dir: results/ma_cross_v1
+  save_trades: true
+  save_equity_curve: true
+  save_metrics: true
+  generate_report: true
+  plots:
+    - price_with_signals
+    - equity_curve
+    - drawdown
+    - monthly_returns
+    - trade_distribution

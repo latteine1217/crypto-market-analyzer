@@ -1,0 +1,77 @@
+services:
+  # TimescaleDB - 時序數據優化的PostgreSQL
+  db:
+    image: timescale/timescaledb:latest-pg16
+    container_name: crypto_timescaledb
+    environment:
+      POSTGRES_USER: crypto
+      POSTGRES_PASSWORD: crypto_pass
+      POSTGRES_DB: crypto_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./database/schemas:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crypto"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - crypto_network
+
+  # Redis - 快取與任務佇列
+  redis:
+    image: redis:7-alpine
+    container_name: crypto_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - crypto_network
+
+  # Jupyter Lab - 數據分析與模型實驗
+  jupyter:
+    build:
+      context: ./data-analyzer
+      dockerfile: Dockerfile
+    container_name: crypto_jupyter
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./data-analyzer:/workspace
+      - ./shared:/workspace/shared
+    environment:
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=crypto
+      - POSTGRES_PASSWORD=crypto_pass
+      - POSTGRES_DB=crypto_db
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - crypto_network
+    command: >
+      bash -c "jupyter lab --ip=0.0.0.0 --port=8888 --no-browser
+      --allow-root --NotebookApp.token='' --NotebookApp.password=''"
+
+volumes:
+  db_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  crypto_network:
+    driver: bridge

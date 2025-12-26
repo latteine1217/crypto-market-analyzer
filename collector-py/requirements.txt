@@ -1,0 +1,28 @@
+# 交易所API
+ccxt>=4.2.0
+
+# 資料庫連接
+psycopg2-binary>=2.9.9
+sqlalchemy>=2.0.25
+
+# 數據處理
+pandas>=2.1.4
+numpy>=1.26.3
+
+# Redis
+redis>=5.0.1
+
+# 排程
+apscheduler>=3.10.4
+
+# 配置管理
+python-dotenv>=1.0.0
+pydantic>=2.5.3
+pydantic-settings>=2.1.0
+
+# 日誌
+loguru>=0.7.2
+
+# 工具
+pytz>=2023.3
+requests>=2.31.0

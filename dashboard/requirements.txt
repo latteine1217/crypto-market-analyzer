@@ -1,0 +1,17 @@
+# Dash 核心
+dash>=2.14.2
+dash-bootstrap-components>=1.5.0
+
+# 資料處理
+pandas>=2.1.4
+numpy>=1.26.3
+
+# 資料庫
+psycopg2-binary>=2.9.9
+
+# 圖表
+plotly>=5.18.0
+
+# 工具
+python-dotenv>=1.0.0
+loguru>=0.7.2
