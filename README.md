@@ -55,9 +55,19 @@ crypto-market-analyzer/
 │   ├── src/
 │   │   ├── features/            # 特徵工程
 │   │   ├── models/              # ML 模型
+│   │   │   └── model_registry.py    # 模型註冊系統 🆕
 │   │   ├── backtesting/         # 回測引擎
-│   │   └── reports/             # 報表生成
+│   │   └── reports/             # 報表生成 🆕
+│   │       ├── report_agent.py      # 主控制器
+│   │       ├── data_collector.py    # 資料收集
+│   │       ├── html_generator.py    # HTML 生成
+│   │       ├── pdf_generator.py     # PDF 生成
+│   │       ├── email_sender.py      # 郵件發送
+│   │       └── image_utils.py       # 圖片處理
 │   ├── notebooks/               # Jupyter 分析筆記本
+│   ├── test_report_system.py    # 報表系統測試 🆕
+│   ├── REPORT_USAGE.md          # 報表使用說明 🆕
+│   ├── PHASE5_COMPLETE.md       # 階段5完成報告 🆕
 │   └── requirements.txt
 │
 ├── database/
@@ -66,14 +76,20 @@ crypto-market-analyzer/
 │   └── migrations/              # 資料庫遷移
 │       ├── 002_add_indexes.sql
 │       ├── 003_data_quality_tables.sql
-│       ├── 004_continuous_aggregates_and_retention.sql  # 🆕
-│       └── 004_README.md        # Migration 004 詳細文檔
+│       ├── 004_continuous_aggregates_and_retention.sql
+│       ├── 004_README.md        # Migration 004 詳細文檔
+│       └── 005_report_logs.sql  # 報表日誌表 🆕
+│
+├── dashboard/                   # Dashboard 介面 🆕
+│   └── static/
+│       └── reports_dashboard.html  # 報表儀表板
 │
 ├── scripts/                     # 開發與運維腳本
 │   ├── setup_test_db.sh         # 測試環境設置
 │   ├── apply_migration_004.sh   # 執行 migration
 │   ├── verify_migration_004.sh  # 驗證 migration
-│   └── check_retention_status.sh # 監控資料保留狀態
+│   ├── check_retention_status.sh # 監控資料保留狀態
+│   └── setup_phase5.sh          # 階段5系統設置 🆕
 │
 ├── shared/                      # 共用配置
 │   ├── config/
@@ -380,12 +396,16 @@ LOG_LEVEL=INFO
 - [ ] 市場情緒 NLP 分析
 - [ ] 完整回測框架
 
-### 📊 階段四：自動化報表
-- [ ] 日報/週報自動生成
-- [ ] Plotly 交互式儀表板
-- [ ] 郵件/Telegram 推送
+### ✅ 階段四：自動化報表（已完成）
+- [x] 日報/週報自動生成（ReportAgent）🆕
+- [x] 模型結果整合（ModelRegistry）🆕
+- [x] PNG 圖表嵌入 HTML 報表 🆕
+- [x] PDF 報表生成（WeasyPrint）🆕
+- [x] 郵件自動發送（EmailSender）🆕
+- [x] 資料庫日誌記錄（report_generation_logs）🆕
+- [x] Dashboard 介面（reports_dashboard.html）🆕
 
-### 💰 階段五：交易執行層
+### 📋 階段五：交易執行層
 - [ ] 模擬交易環境
 - [ ] 實盤交易接口
 - [ ] 風險管理模組
@@ -393,8 +413,11 @@ LOG_LEVEL=INFO
 ## 📖 文檔
 
 - [專案開發指南](CLAUDE.md) - 詳細的開發規範與架構說明
+- [Agent 角色定位](AGENTS.md) - Agent 工作流程與規範
 - [Migration 004 文檔](database/migrations/004_README.md) - 分層資料管理完整說明
 - [使用範例集](database/migrations/004_USAGE_EXAMPLES.sql) - SQL 查詢範例
+- [報表系統使用說明](data-analyzer/REPORT_USAGE.md) - 報表生成與使用指南 🆕
+- [階段5完成報告](data-analyzer/PHASE5_COMPLETE.md) - 自動化報表系統完整說明 🆕
 
 ## ❓ 常見問題
 
@@ -445,4 +468,4 @@ MIT License
 ---
 
 **最後更新**：2024-12-26
-**版本**：v1.1.0（新增分層資料管理）
+**版本**：v1.2.0（完成階段4自動化報表系統）

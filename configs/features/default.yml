@@ -1,0 +1,72 @@
+# 特徵工程配置檔案
+# 用途：定義所有特徵計算的參數
+
+# 價格特徵配置
+price:
+  # 報酬率計算週期
+  return_periods: [1, 5, 10, 20]
+
+  # 動量計算週期
+  momentum_periods: [5, 10, 20]
+
+  # 價格位置計算視窗
+  position_windows: [20, 50, 100]
+
+# 技術指標配置
+technical:
+  # 簡單移動平均線（SMA）視窗
+  sma_windows: [5, 10, 20, 50, 100]
+
+  # 指數移動平均線（EMA）週期
+  ema_spans: [5, 10, 20, 50, 100]
+
+  # RSI 週期
+  rsi_periods: [14, 28]
+
+  # 布林通道配置
+  bb_window: 20
+  bb_num_std: 2.0
+
+  # ATR 週期
+  atr_period: 14
+
+  # MACD 配置
+  macd_fast: 12
+  macd_slow: 26
+  macd_signal: 9
+
+  # Stochastic 配置
+  stoch_k_period: 14
+  stoch_d_period: 3
+
+  # ADX 週期
+  adx_period: 14
+
+# 成交量特徵配置
+volume:
+  # 成交量變化週期
+  change_periods: [1, 5, 10, 20]
+
+  # 成交量移動平均視窗
+  ma_windows: [5, 10, 20, 50]
+
+  # VWAP 視窗
+  vwap_window: 20
+
+  # MFI 週期
+  mfi_period: 14
+
+# 波動率特徵配置
+volatility:
+  # 歷史波動率視窗
+  hist_vol_windows: [5, 10, 20, 50]
+
+  # Parkinson 波動率視窗
+  parkinson_windows: [5, 10, 20]
+
+  # Garman-Klass 波動率視窗
+  gk_windows: [5, 10, 20]
+
+  # 波動率比率配置
+  vol_ratio_short: 5
+  vol_ratio_long: 20

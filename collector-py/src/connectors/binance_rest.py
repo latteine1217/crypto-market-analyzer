@@ -41,9 +41,14 @@ class BinanceRESTConnector:
             'timeout': timeout * 1000,  # ccxt 使用毫秒
             'options': {
                 'defaultType': 'spot',
+                'adjustForTimeDifference': True,
+                # 只載入現貨市場，不載入期貨
+                'fetchMarkets': ['spot'],
             }
         })
-        logger.info("BinanceRESTConnector initialized")
+        # 確保使用現貨市場
+        self.exchange.set_sandbox_mode(False)
+        logger.info("BinanceRESTConnector initialized for SPOT market")
 
     def fetch_ohlcv(
         self,

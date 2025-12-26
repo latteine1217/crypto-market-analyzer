@@ -1,331 +1,200 @@
 """
-成交量特徵工程模組
+成交量特徵計算模組
 
-功能：
-1. 成交量統計特徵
-2. 成交量動量特徵
-3. 價量關係特徵
-4. 訂單流特徵（基於 trades 資料）
+職責：
+- 計算成交量相關特徵
+- 成交量變化
+- 成交量比率
+- 成交量指標（OBV, VWAP等）
 """
-import pandas as pd
 import numpy as np
-from typing import Optional, List
+import pandas as pd
 
 
 class VolumeFeatures:
     """成交量特徵計算器"""
 
     @staticmethod
-    def calculate_volume_stats(
+    def calculate_volume_changes(
         df: pd.DataFrame,
-        volume_col: str = 'volume',
-        windows: List[int] = [10, 20, 50]
+        periods: list = [1, 5, 10, 20]
     ) -> pd.DataFrame:
         """
-        計算成交量統計特徵
+        計算成交量變化
 
         Args:
-            df: 包含成交量資料的 DataFrame
-            volume_col: 成交量欄位名稱
-            windows: 滾動窗口大小列表
+            df: OHLCV DataFrame
+            periods: 計算週期列表
 
         Returns:
-            包含成交量統計特徵的 DataFrame
-        """
-        result = df.copy()
-
-        for window in windows:
-            # 平均成交量
-            result[f'volume_ma_{window}'] = result[volume_col].rolling(
-                window=window
-            ).mean()
-
-            # 成交量標準差
-            result[f'volume_std_{window}'] = result[volume_col].rolling(
-                window=window
-            ).std()
-
-            # 成交量相對強度（當前成交量 / 平均成交量）
-            result[f'volume_ratio_{window}'] = (
-                result[volume_col] / result[f'volume_ma_{window}']
-            )
-
-        return result
-
-    @staticmethod
-    def calculate_volume_momentum(
-        df: pd.DataFrame,
-        volume_col: str = 'volume',
-        periods: List[int] = [5, 10, 20]
-    ) -> pd.DataFrame:
-        """
-        計算成交量動量指標
-
-        Args:
-            df: 包含成交量資料的 DataFrame
-            volume_col: 成交量欄位名稱
-            periods: 動量計算週期
-
-        Returns:
-            包含成交量動量的 DataFrame
+            包含成交量變化特徵的 DataFrame
         """
         result = df.copy()
 
         for period in periods:
-            # 成交量變化率
-            result[f'volume_change_{period}'] = result[volume_col].pct_change(
-                period
+            # 成交量變化量
+            result[f'volume_change_{period}'] = (
+                result['volume'] - result['volume'].shift(period)
             )
 
-            # 成交量動量
-            result[f'volume_momentum_{period}'] = (
-                result[volume_col] / result[volume_col].shift(period) - 1
+            # 成交量變化率
+            result[f'volume_change_pct_{period}'] = (
+                result['volume'].pct_change(period) * 100
             )
 
         return result
 
     @staticmethod
-    def calculate_obv(
+    def calculate_volume_ma(
         df: pd.DataFrame,
-        close_col: str = 'close',
-        volume_col: str = 'volume'
+        windows: list = [5, 10, 20, 50]
     ) -> pd.DataFrame:
         """
-        計算 OBV (On-Balance Volume) 指標
-
-        OBV 根據價格漲跌累積成交量：
-        - 收盤價上漲：OBV += volume
-        - 收盤價下跌：OBV -= volume
+        計算成交量移動平均
 
         Args:
-            df: 包含價格和成交量的 DataFrame
-            close_col: 收盤價欄位名稱
-            volume_col: 成交量欄位名稱
+            df: OHLCV DataFrame
+            windows: MA 視窗大小列表
+
+        Returns:
+            包含成交量 MA 的 DataFrame
+        """
+        result = df.copy()
+
+        for window in windows:
+            result[f'volume_ma_{window}'] = result['volume'].rolling(window=window).mean()
+
+            # 成交量相對於 MA 的比率
+            result[f'volume_to_ma_{window}'] = (
+                result['volume'] / result[f'volume_ma_{window}']
+            )
+
+        return result
+
+    @staticmethod
+    def calculate_obv(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        計算能量潮 (On-Balance Volume, OBV)
+
+        Args:
+            df: OHLCV DataFrame
 
         Returns:
             包含 OBV 的 DataFrame
         """
         result = df.copy()
 
-        # 計算價格變化
-        price_change = result[close_col].diff()
+        # 價格上漲時累加成交量，下跌時累減成交量
+        obv = []
+        obv_value = 0
 
-        # OBV 計算
-        obv = (np.sign(price_change) * result[volume_col]).fillna(0).cumsum()
+        for i in range(len(result)):
+            if i == 0:
+                obv_value = result['volume'].iloc[i]
+            else:
+                if result['close'].iloc[i] > result['close'].iloc[i-1]:
+                    obv_value += result['volume'].iloc[i]
+                elif result['close'].iloc[i] < result['close'].iloc[i-1]:
+                    obv_value -= result['volume'].iloc[i]
+
+            obv.append(obv_value)
+
         result['obv'] = obv
-
-        # OBV 變化率
-        result['obv_change'] = result['obv'].pct_change()
 
         return result
 
     @staticmethod
-    def calculate_vwap(
-        df: pd.DataFrame,
-        price_col: str = 'close',
-        volume_col: str = 'volume',
-        windows: List[int] = [10, 20, 50]
-    ) -> pd.DataFrame:
+    def calculate_vwap(df: pd.DataFrame, window: int = 20) -> pd.DataFrame:
         """
-        計算 VWAP (Volume Weighted Average Price)
-
-        VWAP = Σ(價格 × 成交量) / Σ(成交量)
+        計算成交量加權平均價格 (Volume Weighted Average Price, VWAP)
 
         Args:
-            df: 包含價格和成交量的 DataFrame
-            price_col: 價格欄位名稱
-            volume_col: 成交量欄位名稱
-            windows: 滾動窗口大小列表
+            df: OHLCV DataFrame
+            window: 計算視窗
 
         Returns:
             包含 VWAP 的 DataFrame
         """
         result = df.copy()
 
-        for window in windows:
-            # 計算滾動 VWAP
-            pv = (result[price_col] * result[volume_col]).rolling(
-                window=window
-            ).sum()
-            v = result[volume_col].rolling(window=window).sum()
+        # 典型價格（Typical Price）
+        typical_price = (result['high'] + result['low'] + result['close']) / 3
 
-            result[f'vwap_{window}'] = pv / v
-
-            # 價格偏離 VWAP 的程度
-            result[f'price_vwap_diff_{window}'] = (
-                (result[price_col] - result[f'vwap_{window}']) /
-                result[f'vwap_{window}']
-            )
-
-        return result
-
-    @staticmethod
-    def calculate_price_volume_correlation(
-        df: pd.DataFrame,
-        price_col: str = 'close',
-        volume_col: str = 'volume',
-        windows: List[int] = [10, 20, 50]
-    ) -> pd.DataFrame:
-        """
-        計算價量相關性
-
-        Args:
-            df: 包含價格和成交量的 DataFrame
-            price_col: 價格欄位名稱
-            volume_col: 成交量欄位名稱
-            windows: 滾動窗口大小列表
-
-        Returns:
-            包含價量相關性的 DataFrame
-        """
-        result = df.copy()
-
-        for window in windows:
-            # 滾動相關係數
-            result[f'pv_corr_{window}'] = result[price_col].rolling(
-                window=window
-            ).corr(result[volume_col])
-
-        return result
-
-    @staticmethod
-    def calculate_volume_profile(
-        df: pd.DataFrame,
-        volume_col: str = 'volume',
-        window: int = 20
-    ) -> pd.DataFrame:
-        """
-        計算成交量分布特徵
-
-        Args:
-            df: 包含成交量資料的 DataFrame
-            volume_col: 成交量欄位名稱
-            window: 滾動窗口大小
-
-        Returns:
-            包含成交量分布特徵的 DataFrame
-        """
-        result = df.copy()
-
-        # 成交量百分位數
-        result[f'volume_percentile_{window}'] = result[volume_col].rolling(
-            window=window
-        ).apply(
-            lambda x: pd.Series(x).rank(pct=True).iloc[-1]
+        # VWAP
+        result[f'vwap_{window}'] = (
+            (typical_price * result['volume']).rolling(window=window).sum() /
+            result['volume'].rolling(window=window).sum()
         )
 
-        # 異常大成交量標記（超過均值 + 2倍標準差）
-        volume_ma = result[volume_col].rolling(window=window).mean()
-        volume_std = result[volume_col].rolling(window=window).std()
-        result[f'volume_spike_{window}'] = (
-            result[volume_col] > (volume_ma + 2 * volume_std)
-        ).astype(int)
+        # 價格相對於 VWAP 的位置
+        result[f'price_to_vwap_{window}'] = (
+            (result['close'] - result[f'vwap_{window}']) / result[f'vwap_{window}'] * 100
+        )
 
         return result
 
     @staticmethod
-    def add_all_volume_features(
-        df: pd.DataFrame,
-        close_col: str = 'close',
-        volume_col: str = 'volume'
-    ) -> pd.DataFrame:
+    def calculate_mfi(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
         """
-        一次性加入所有成交量特徵
+        計算資金流量指標 (Money Flow Index, MFI)
 
         Args:
-            df: 原始 OHLCV 資料
-            close_col: 收盤價欄位名稱
-            volume_col: 成交量欄位名稱
+            df: OHLCV DataFrame
+            period: MFI 計算週期
+
+        Returns:
+            包含 MFI 的 DataFrame
+        """
+        result = df.copy()
+
+        # 典型價格
+        typical_price = (result['high'] + result['low'] + result['close']) / 3
+
+        # 資金流量
+        money_flow = typical_price * result['volume']
+
+        # 正負資金流量
+        positive_flow = money_flow.where(typical_price > typical_price.shift(1), 0)
+        negative_flow = money_flow.where(typical_price < typical_price.shift(1), 0)
+
+        # 滾動總和
+        positive_mf = positive_flow.rolling(window=period).sum()
+        negative_mf = negative_flow.rolling(window=period).sum()
+
+        # MFI
+        mfr = positive_mf / negative_mf
+        result[f'mfi_{period}'] = 100 - (100 / (1 + mfr))
+
+        return result
+
+    @classmethod
+    def calculate_all(
+        cls,
+        df: pd.DataFrame,
+        change_periods: list = [1, 5, 10, 20],
+        ma_windows: list = [5, 10, 20, 50],
+        vwap_window: int = 20,
+        mfi_period: int = 14
+    ) -> pd.DataFrame:
+        """
+        計算所有成交量特徵
+
+        Args:
+            df: OHLCV DataFrame
+            change_periods: 成交量變化週期
+            ma_windows: 成交量 MA 視窗
+            vwap_window: VWAP 視窗
+            mfi_period: MFI 週期
 
         Returns:
             包含所有成交量特徵的 DataFrame
         """
         result = df.copy()
 
-        # 成交量統計
-        result = VolumeFeatures.calculate_volume_stats(result, volume_col)
-
-        # 成交量動量
-        result = VolumeFeatures.calculate_volume_momentum(result, volume_col)
-
-        # OBV
-        result = VolumeFeatures.calculate_obv(result, close_col, volume_col)
-
-        # VWAP
-        result = VolumeFeatures.calculate_vwap(result, close_col, volume_col)
-
-        # 價量相關性
-        result = VolumeFeatures.calculate_price_volume_correlation(
-            result, close_col, volume_col
-        )
-
-        # 成交量分布
-        result = VolumeFeatures.calculate_volume_profile(result, volume_col)
+        result = cls.calculate_volume_changes(result, periods=change_periods)
+        result = cls.calculate_volume_ma(result, windows=ma_windows)
+        result = cls.calculate_obv(result)
+        result = cls.calculate_vwap(result, window=vwap_window)
+        result = cls.calculate_mfi(result, period=mfi_period)
 
         return result
-
-
-class OrderFlowFeatures:
-    """
-    訂單流特徵（基於 trades 資料）
-
-    需要更細粒度的 trades 資料
-    """
-
-    @staticmethod
-    def aggregate_trades_to_bars(
-        trades_df: pd.DataFrame,
-        freq: str = '1min',
-        timestamp_col: str = 'timestamp',
-        price_col: str = 'price',
-        quantity_col: str = 'quantity',
-        is_buyer_maker_col: str = 'is_buyer_maker'
-    ) -> pd.DataFrame:
-        """
-        將 trades 聚合為時間條
-
-        Args:
-            trades_df: Trades 資料
-            freq: 聚合頻率（如 '1min', '5min'）
-            timestamp_col: 時間戳欄位
-            price_col: 價格欄位
-            quantity_col: 數量欄位
-            is_buyer_maker_col: 買方是否為 maker
-
-        Returns:
-            聚合後的 DataFrame
-        """
-        df = trades_df.copy()
-        df[timestamp_col] = pd.to_datetime(df[timestamp_col])
-        df = df.set_index(timestamp_col)
-
-        # 聚合為 OHLC
-        ohlc = df[price_col].resample(freq).ohlc()
-        ohlc.columns = ['open', 'high', 'low', 'close']
-
-        # 總成交量
-        volume = df[quantity_col].resample(freq).sum()
-
-        # 買單成交量（taker買入）
-        buy_volume = df[~df[is_buyer_maker_col]][quantity_col].resample(
-            freq
-        ).sum()
-
-        # 賣單成交量（taker賣出）
-        sell_volume = df[df[is_buyer_maker_col]][quantity_col].resample(
-            freq
-        ).sum()
-
-        # 合併
-        result = pd.concat([ohlc, volume, buy_volume, sell_volume], axis=1)
-        result.columns = list(ohlc.columns) + [
-            'volume', 'buy_volume', 'sell_volume'
-        ]
-
-        # 計算買賣壓力
-        result['buy_sell_ratio'] = result['buy_volume'] / (
-            result['sell_volume'] + 1e-10
-        )
-        result['net_volume'] = result['buy_volume'] - result['sell_volume']
-
-        return result.reset_index()

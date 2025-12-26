@@ -394,18 +394,33 @@ crypto-market-analyzer/
 │
 ├── data-analyzer/            # Python：分析 + 模型 + 策略
 │   ├── src/
-│   │   ├── features/
-│   │   ├── models/
-│   │   ├── anomaly/
-│   │   ├── strategies/
-│   │   ├── backtesting/
-│   │   └── reports/
+│   │   ├── features/         # 特徵工程
+│   │   ├── models/           # ML 模型
+│   │   │   └── model_registry.py    # 模型註冊系統 ✅
+│   │   ├── anomaly/          # 異常檢測
+│   │   ├── strategies/       # 交易策略
+│   │   ├── backtesting/      # 回測引擎
+│   │   └── reports/          # 報表生成系統 ✅
+│   │       ├── report_agent.py      # 主控制器
+│   │       ├── data_collector.py    # 資料收集
+│   │       ├── html_generator.py    # HTML 生成
+│   │       ├── pdf_generator.py     # PDF 生成
+│   │       ├── email_sender.py      # 郵件發送
+│   │       └── image_utils.py       # 圖片處理
 │   ├── notebooks/            # EDA / Prototype
+│   ├── test_report_system.py # 報表系統測試 ✅
+│   ├── REPORT_USAGE.md       # 報表使用說明 ✅
+│   ├── PHASE5_COMPLETE.md    # 階段5完成報告 ✅
 │   └── requirements.txt
 │
 ├── database/
 │   ├── schemas/              # schema.sql / migration scripts
 │   └── migrations/
+│       └── 005_report_logs.sql  # 報表日誌表 ✅
+
+├── dashboard/                # Dashboard 介面 ✅
+│   └── static/
+│       └── reports_dashboard.html  # 報表儀表板
 │
 ├── configs/
 │   ├── collector/
@@ -421,9 +436,12 @@ crypto-market-analyzer/
 │   ├── init_db.sh
 │   ├── run_collector.sh
 │   ├── run_backtest.sh
+│   ├── setup_phase5.sh       # 階段5系統設置 ✅
 │   └── verify_*.py
 │
 ├── docker-compose.yml
+├── CLAUDE.md                 # 專案開發指南
+├── AGENTS.md                 # 本文件
 └── README.md
 ```
 

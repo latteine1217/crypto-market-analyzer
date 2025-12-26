@@ -1,0 +1,50 @@
+# 回測配置
+
+# 資料設定
+data:
+  symbol: 'BTC/USDT'
+  timeframe: '1m'
+  limit: 500  # 使用最近 500 筆資料
+
+# 回測引擎設定
+engine:
+  initial_capital: 10000.0  # 初始資金 $10,000
+  commission_rate: 0.001    # 手續費率 0.1%
+  slippage_rate: 0.0005     # 滑價率 0.05%
+  risk_free_rate: 0.0       # 無風險利率 0%
+  position_size_pct: 0.95   # 每次使用 95% 資金
+
+# 特徵設定
+features:
+  use_features: true
+  remove_constant: true
+  variance_threshold: 0.01
+  correlation_threshold: 0.95
+  scale_method: 'standard'
+
+# 策略設定
+strategies:
+  - name: 'BuyAndHold'
+    enabled: true
+    params: {}
+
+  - name: 'MA_Cross'
+    enabled: true
+    params:
+      fast_period: 10
+      slow_period: 30
+
+  - name: 'RSI'
+    enabled: true
+    params:
+      rsi_period: 14
+      oversold_threshold: 30
+      overbought_threshold: 70
+
+# 輸出設定
+output:
+  save_results: true
+  results_dir: 'results/backtest'
+  save_plots: true
+  plot_equity_curve: true
+  plot_signals: true

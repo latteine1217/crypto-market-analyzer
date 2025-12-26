@@ -1,0 +1,110 @@
+# ============================================
+# XGBoost 價格預測模型配置
+# ============================================
+
+# 實驗基本資訊
+experiment:
+  name: xgboost_btc_price_forecast
+  version: "v1.0"
+  description: "使用 XGBoost 預測 BTC 價格走勢"
+  random_seed: 42
+
+# 資料配置
+data:
+  source:
+    exchange: binance
+    symbol: "BTC/USDT"
+    market_id: 1  # 資料庫中的 market_id
+    timeframe: "1m"
+    # 時間範圍（從資料庫查詢）
+    lookback_days: 30  # 使用最近 30 天的資料
+
+  # 資料分割
+  split:
+    train_ratio: 0.7
+    val_ratio: 0.2
+    test_ratio: 0.1
+
+# 特徵配置
+features:
+  # 滯後特徵
+  lag_periods: [1, 2, 3, 5, 10, 20, 30]
+
+  # 滾動窗口特徵
+  rolling_windows: [5, 10, 20, 60]
+
+  # 報酬率特徵
+  return_periods: [1, 5, 10, 20]
+
+  # 技術指標（由 TechnicalIndicators 模組提供）
+  include_technical_indicators: true
+  technical_indicators:
+    - macd
+    - rsi
+    - bollinger_bands
+    - moving_averages  # [20, 60, 200]
+
+# 模型配置
+model:
+  # XGBoost 基本參數
+  n_estimators: 100      # 樹的數量
+  max_depth: 6           # 樹的最大深度
+  learning_rate: 0.1     # 學習率
+
+  # 正則化參數
+  subsample: 0.8         # 樣本採樣比例
+  colsample_bytree: 0.8  # 特徵採樣比例
+  min_child_weight: 1    # 最小子節點權重
+  gamma: 0               # 分裂所需最小損失減少
+
+  # L1/L2 正則化
+  reg_alpha: 0           # L1 正則化係數
+  reg_lambda: 1          # L2 正則化係數
+
+  # 其他參數
+  random_state: 42
+  n_jobs: -1             # 使用所有 CPU 核心
+
+# 訓練配置
+training:
+  val_ratio: 0.2         # 驗證集比例
+  early_stopping_rounds: 10  # 早停輪數
+  verbose: true          # 顯示訓練進度
+
+# 評估指標
+evaluation:
+  metrics:
+    - mse          # 均方誤差
+    - rmse         # 均方根誤差
+    - mae          # 平均絕對誤差
+    - r2           # R² 分數
+    - mape         # 平均絕對百分比誤差
+    - direction_accuracy  # 方向預測準確率
+
+# 輸出配置
+output:
+  # 模型保存路徑
+  model_dir: "models/saved"
+  model_filename: "xgboost_btc_v1.pkl"
+
+  # 預測結果保存路徑
+  results_dir: "results/xgboost_btc_v1"
+  predictions_file: "predictions.csv"
+  metrics_file: "metrics.json"
+
+  # 訓練歷史
+  training_history_file: "training_history.csv"
+
+  # 特徵重要性
+  feature_importance_file: "feature_importance.csv"
+
+  # 圖表配置
+  plots:
+    enabled: true
+    save_format: "png"  # png, pdf, svg
+    dpi: 300
+    figures:
+      - actual_vs_predicted       # 實際 vs 預測值
+      - training_history          # 訓練歷史
+      - residuals                 # 殘差分析
+      - feature_importance_top20  # Top 20 特徵重要性
