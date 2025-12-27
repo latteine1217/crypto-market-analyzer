@@ -1,7 +1,7 @@
 """
 主程式：定期抓取多個交易所數據並存入資料庫
-支援：Binance、OKX
-支援多交易對：BTC/USDT、ETH/USDT、BTC/ETH
+支援：Bybit、OKX（需 VPN）
+支援多交易對：BTC/USDT、ETH/USDT、SOL/USDT
 """
 import sys
 from pathlib import Path
@@ -14,7 +14,7 @@ from typing import Dict, List
 sys.path.insert(0, str(Path(__file__).parent))
 
 from config import settings
-from connectors.binance_rest import BinanceRESTConnector
+from connectors.bybit_rest import BybitClient
 from connectors.okx_rest import OKXRESTConnector
 from loaders.db_loader import DatabaseLoader
 
@@ -38,23 +38,14 @@ class MultiExchangeCollector:
 
         # 初始化各交易所連接器
         self.connectors = {
-            'binance': BinanceRESTConnector(
-                api_key=settings.binance_api_key,
-                api_secret=settings.binance_api_secret
-            ),
-            'okx': OKXRESTConnector()
+            'bybit': BybitClient(),  # 無需 VPN
+            # 'okx': OKXRESTConnector()  # 需要 VPN
         }
 
         # 定義要收集的交易對（按交易所分組）
         self.collection_config = {
-            'binance': {
-                'symbols': ['BTC/USDT', 'ETH/USDT', 'ETH/BTC'],
-                'timeframes': ['1m'],
-                'collect_trades': True,
-                'collect_orderbook': True
-            },
-            'okx': {
-                'symbols': ['BTC/USDT', 'ETH/USDT', 'ETH/BTC'],
+            'bybit': {
+                'symbols': ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
                 'timeframes': ['1m'],
                 'collect_trades': True,
                 'collect_orderbook': True

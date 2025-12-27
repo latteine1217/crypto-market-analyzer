@@ -5,7 +5,7 @@
 import psycopg2
 from psycopg2.extras import execute_batch
 from typing import List, Dict, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from loguru import logger
 
 from config import settings
@@ -105,7 +105,7 @@ class DatabaseLoader:
         rows = []
         for candle in ohlcv_data:
             ts_ms, o, h, l, c, v = candle[:6]
-            open_time = datetime.fromtimestamp(ts_ms / 1000)
+            open_time = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
             rows.append((market_id, timeframe, open_time, o, h, l, c, v))
 
         # 批次插入
@@ -160,7 +160,7 @@ class DatabaseLoader:
             price = trade['price']
             amount = trade['amount']
             side = trade['side']
-            timestamp = datetime.fromtimestamp(trade['timestamp'] / 1000)
+            timestamp = datetime.fromtimestamp(trade['timestamp'] / 1000, tz=timezone.utc)
             rows.append((market_id, trade_id, price, amount, side, timestamp))
 
         with self.conn.cursor() as cur:
@@ -210,9 +210,9 @@ class DatabaseLoader:
             # 處理 timestamp 可能為 None 的情況
             ts = snapshot.get('timestamp')
             if ts is None:
-                timestamp = datetime.now()
+                timestamp = datetime.now(tz=timezone.utc)
             else:
-                timestamp = datetime.fromtimestamp(ts / 1000)
+                timestamp = datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
 
             bids_json = json.dumps(snapshot['bids'])
             asks_json = json.dumps(snapshot['asks'])
