@@ -136,7 +136,7 @@ def check_database_status():
         table_sizes = cursor.fetchall()
 
         # 資料筆數統計
-        tables = ['klines_1m', 'klines_1h', 'trades', 'orderbook_snapshots']
+        tables = ['ohlcv', 'trades', 'orderbook_snapshots']
         row_counts = {}
         for table in tables:
             try:

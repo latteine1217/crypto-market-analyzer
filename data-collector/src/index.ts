@@ -5,6 +5,7 @@
 import { log } from './utils/logger';
 import { config, validateConfig, displayConfig } from './config';
 import { BinanceWSClient } from './binance_ws/BinanceWSClient';
+import { BybitWSClient } from './bybit_ws/BybitWSClient';
 import { OrderBookManager } from './orderbook_handlers/OrderBookManager';
 import { RedisQueue } from './queues/RedisQueue';
 import { DBFlusher } from './database/DBFlusher';
@@ -18,7 +19,7 @@ import {
 } from './types';
 
 class WebSocketCollector {
-  private wsClient: BinanceWSClient | null = null;
+  private wsClient: BinanceWSClient | BybitWSClient | null = null;
   private orderBookManager: OrderBookManager;
   private redisQueue: RedisQueue;
   private dbFlusher: DBFlusher;
@@ -26,9 +27,11 @@ class WebSocketCollector {
   private snapshotTimer: NodeJS.Timeout | null = null;
   private statsTimer: NodeJS.Timeout | null = null;
   private startTime: number;
+  private exchange: string;
 
   constructor() {
     this.startTime = Date.now();
+    this.exchange = process.env.EXCHANGE || 'bybit';
 
     // 初始化 Prometheus Metrics Server
     const metricsPort = parseInt(process.env.METRICS_PORT || '8001');
@@ -70,14 +73,20 @@ class WebSocketCollector {
 
       // 建立 WebSocket 配置
       const wsConfig: WSConfig = {
-        exchange: 'binance',
+        exchange: this.exchange,
         symbols: config.subscriptions.symbols,
         streams: config.subscriptions.streams,
         ...config.websocket
       };
 
-      // 建立 WebSocket 客戶端
-      this.wsClient = new BinanceWSClient(wsConfig);
+      // 建立 WebSocket 客戶端（根據配置選擇交易所）
+      if (this.exchange === 'bybit') {
+        log.info('Using Bybit WebSocket');
+        this.wsClient = new BybitWSClient(wsConfig);
+      } else {
+        log.info('Using Binance WebSocket');
+        this.wsClient = new BinanceWSClient(wsConfig);
+      }
 
       // 設置事件處理
       this.setupEventHandlers();
@@ -115,25 +124,25 @@ class WebSocketCollector {
     // 連接成功
     this.wsClient.on('connected', () => {
       log.info('✅ WebSocket connected');
-      this.metricsServer.wsConnectionStatus.set({ exchange: 'binance' }, 1);
+      this.metricsServer.wsConnectionStatus.set({ exchange: this.exchange }, 1);
     });
 
     // 連接斷開
     this.wsClient.on('disconnected', (code, reason) => {
       log.warn('⚠️ WebSocket disconnected', { code, reason });
-      this.metricsServer.wsConnectionStatus.set({ exchange: 'binance' }, 0);
+      this.metricsServer.wsConnectionStatus.set({ exchange: this.exchange }, 0);
     });
 
     // 重連中
     this.wsClient.on('reconnecting', (attempt) => {
       log.info(`🔄 Reconnecting... (attempt ${attempt})`);
-      this.metricsServer.wsReconnectsTotal.inc({ exchange: 'binance' });
+      this.metricsServer.wsReconnectsTotal.inc({ exchange: this.exchange });
     });
 
     // 錯誤
     this.wsClient.on('error', (error) => {
       log.error('❌ WebSocket error', error);
-      this.metricsServer.wsErrorsTotal.inc({ exchange: 'binance', error_type: 'connection' });
+      this.metricsServer.wsErrorsTotal.inc({ exchange: this.exchange, error_type: 'connection' });
     });
 
     // 收到訊息
@@ -194,7 +203,7 @@ class WebSocketCollector {
     } catch (error) {
       log.error('Failed to handle message', error);
       this.metricsServer.wsErrorsTotal.inc({
-        exchange: 'binance',
+        exchange: this.exchange,
         error_type: 'message_processing'
       });
     }
@@ -210,21 +219,21 @@ class WebSocketCollector {
       async (snapshot: OrderBookSnapshot) => {
         // 記錄訂單簿快照
         this.metricsServer.orderbookSnapshotsTotal.inc({
-          exchange: 'binance',
+          exchange: this.exchange,
           symbol: snapshot.symbol
         });
 
         // 更新訂單簿價格 metrics
         if (snapshot.bids && snapshot.bids.length > 0) {
           this.metricsServer.orderbookBestBidPrice.set({
-            exchange: 'binance',
+            exchange: this.exchange,
             symbol: snapshot.symbol
           }, snapshot.bids[0].price);
         }
 
         if (snapshot.asks && snapshot.asks.length > 0) {
           this.metricsServer.orderbookBestAskPrice.set({
-            exchange: 'binance',
+            exchange: this.exchange,
             symbol: snapshot.symbol
           }, snapshot.asks[0].price);
         }
@@ -237,12 +246,12 @@ class WebSocketCollector {
           const spreadBps = (spread / bestBid) * 10000;
 
           this.metricsServer.orderbookSpread.set({
-            exchange: 'binance',
+            exchange: this.exchange,
             symbol: snapshot.symbol
           }, spread);
 
           this.metricsServer.orderbookSpreadBps.set({
-            exchange: 'binance',
+            exchange: this.exchange,
             symbol: snapshot.symbol
           }, spreadBps);
         }
@@ -250,7 +259,7 @@ class WebSocketCollector {
         // 推送到 Redis 佇列
         const message: QueueMessage = {
           type: MessageType.ORDERBOOK_SNAPSHOT,
-          exchange: 'binance',
+          exchange: this.exchange,
           data: snapshot,
           receivedAt: Date.now()
         };
