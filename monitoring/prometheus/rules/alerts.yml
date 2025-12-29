@@ -103,3 +103,132 @@ groups:
         annotations:
           summary: "PostgreSQL 服務停止運行"
           description: "PostgreSQL 已經停止運行超過 3 分鐘"
+
+  # 價格變動告警
+  - name: price_alerts
+    interval: 30s
+    rules:
+      # 價格急劇上漲（5 分鐘內漲幅超過 3%）
+      - alert: PriceSpike
+        expr: |
+          (
+            (price_current{symbol=~"BTC.*|ETH.*"} - price_current{symbol=~"BTC.*|ETH.*"} offset 5m)
+            / price_current{symbol=~"BTC.*|ETH.*"} offset 5m
+          ) * 100 > 3
+        for: 1m
+        labels:
+          severity: warning
+          component: price_monitor
+        annotations:
+          summary: "{{ $labels.symbol }} 價格急劇上漲"
+          description: "{{ $labels.symbol }} 在 5 分鐘內上漲 {{ $value | humanize }}%（當前價格：{{ $labels.price }}）"
+
+      # 價格急劇下跌（5 分鐘內跌幅超過 3%）
+      - alert: PriceDrop
+        expr: |
+          (
+            (price_current{symbol=~"BTC.*|ETH.*"} - price_current{symbol=~"BTC.*|ETH.*"} offset 5m)
+            / price_current{symbol=~"BTC.*|ETH.*"} offset 5m
+          ) * 100 < -3
+        for: 1m
+        labels:
+          severity: warning
+          component: price_monitor
+        annotations:
+          summary: "{{ $labels.symbol }} 價格急劇下跌"
+          description: "{{ $labels.symbol }} 在 5 分鐘內下跌 {{ $value | humanize }}%（當前價格：{{ $labels.price }}）"
+
+      # 價格極端波動（5 分鐘內漲跌幅超過 5%）
+      - alert: ExtremePriceVolatility
+        expr: |
+          abs(
+            (price_current{symbol=~"BTC.*|ETH.*"} - price_current{symbol=~"BTC.*|ETH.*"} offset 5m)
+            / price_current{symbol=~"BTC.*|ETH.*"} offset 5m
+          ) * 100 > 5
+        for: 30s
+        labels:
+          severity: critical
+          component: price_monitor
+        annotations:
+          summary: "{{ $labels.symbol }} 價格極端波動"
+          description: "{{ $labels.symbol }} 在 5 分鐘內波動 {{ $value | humanize }}%（當前價格：{{ $labels.price }}）⚠️ 需要立即關注！"
+
+      # 價格異常停滯（10 分鐘內價格無變化）
+      - alert: PriceStagnant
+        expr: |
+          (
+            price_current{symbol=~"BTC.*|ETH.*"} == price_current{symbol=~"BTC.*|ETH.*"} offset 10m
+          )
+        for: 5m
+        labels:
+          severity: warning
+          component: price_monitor
+        annotations:
+          summary: "{{ $labels.symbol }} 價格異常停滯"
+          description: "{{ $labels.symbol }} 價格在過去 10 分鐘內沒有變化（當前價格：{{ $labels.price }}），可能是數據源問題"
+
+  # MAD 異常檢測告警
+  - name: mad_anomaly_alerts
+    interval: 30s
+    rules:
+      # MAD 檢測到異常（警告級別）
+      - alert: MADAnomalyDetected
+        expr: |
+          mad_anomaly_score{symbol=~"BTC.*|ETH.*"} > 3
+        for: 1m
+        labels:
+          severity: warning
+          component: mad_detector
+        annotations:
+          summary: "MAD 檢測到 {{ $labels.symbol }} 異常"
+          description: "{{ $labels.symbol }} 異常分數: {{ $value | humanize }}（閾值: 3.0），當前價格偏離中位數較大"
+
+      # MAD 檢測到嚴重異常（嚴重級別）
+      - alert: MADSevereAnomaly
+        expr: |
+          mad_anomaly_score{symbol=~"BTC.*|ETH.*"} > 5
+        for: 30s
+        labels:
+          severity: critical
+          component: mad_detector
+        annotations:
+          summary: "MAD 檢測到 {{ $labels.symbol }} 嚴重異常 🚨"
+          description: "{{ $labels.symbol }} 異常分數: {{ $value | humanize }}（閾值: 5.0）⚠️ 價格嚴重偏離正常範圍，請立即檢查！"
+
+      # MAD 異常檢測率過高
+      - alert: HighAnomalyRate
+        expr: |
+          (
+            rate(mad_anomaly_detected_total{severity="warning"}[1h]) > 0.1
+          )
+        for: 5m
+        labels:
+          severity: warning
+          component: mad_detector
+        annotations:
+          summary: "{{ $labels.symbol }} 異常檢測率過高"
+          description: "{{ $labels.symbol }} 過去 1 小時異常檢測率: {{ $value | humanizePercentage }}%（超過 10%），市場可能處於高波動狀態"
+
+      # MAD 檢測服務停止運行
+      - alert: MADDetectorDown
+        expr: |
+          up{job="mad-detector"} == 0
+        for: 3m
+        labels:
+          severity: critical
+          component: mad_detector
+        annotations:
+          summary: "MAD 異常檢測服務停止運行"
+          description: "MAD Detector 已經停止運行超過 3 分鐘，異常檢測功能不可用"
+
+      # MAD 檢測延遲過高
+      - alert: MADDetectionHighLatency
+        expr: |
+          mad_detection_latency_seconds{quantile="0.99"} > 5
+        for: 5m
+        labels:
+          severity: warning
+          component: mad_detector
+        annotations:
+          summary: "MAD 異常檢測延遲過高"
+          description: "{{ $labels.symbol }} 的 99 分位檢測延遲: {{ $value | humanize }}s（預期: < 5s），可能影響即時監控"

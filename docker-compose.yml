@@ -19,7 +19,7 @@ services:
       - ./database/schemas:/docker-entrypoint-initdb.d
       - ./database/migrations:/migrations
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-crypto}"]
+      test: ["CMD-SHELL", "pg_isready -U crypto -d crypto_db"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -138,6 +138,7 @@ services:
       - REDIS_DB=${REDIS_DB:-0}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - TZ=${TZ:-Asia/Taipei}
+      - EXCHANGE=${EXCHANGE:-bybit}
       - SYMBOLS=${WS_SYMBOLS:-BTCUSDT,ETHUSDT}
       - STREAMS=${WS_STREAMS:-trade,depth}
       - METRICS_PORT=${WS_COLLECTOR_METRICS_PORT:-8001}
@@ -230,6 +231,38 @@ services:
       - crypto_network
     command: python /workspace/scripts/report_scheduler.py
 
+  # MAD Anomaly Detector - MAD 異常檢測服務
+  mad-detector:
+    build:
+      context: ./data-analyzer
+      dockerfile: Dockerfile
+    container_name: crypto_mad_detector
+    environment:
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-crypto}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-crypto_pass}
+      - POSTGRES_DB=${POSTGRES_DB:-crypto_db}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - TZ=${TZ:-Asia/Taipei}
+      - MAD_SYMBOLS=${MAD_SYMBOLS:-BTC/USDT,ETH/USDT}
+      - MAD_THRESHOLD=${MAD_THRESHOLD:-3.0}
+      - MAD_WINDOW_SIZE=${MAD_WINDOW_SIZE:-100}
+      - MAD_CHECK_INTERVAL=${MAD_CHECK_INTERVAL:-30}
+      - MAD_METRICS_PORT=8002
+    ports:
+      - "${MAD_METRICS_PORT:-8002}:8002"  # Prometheus metrics
+    volumes:
+      - ./data-analyzer:/workspace
+      - ./shared:/workspace/shared
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - crypto_network
+    command: python /workspace/src/anomaly/mad_service.py
+
   # ============================================
   # 監控服務
   # ============================================
@@ -289,6 +322,7 @@ services:
       - SMTP_PASSWORD=${SMTP_PASSWORD:-}
       - SMTP_FROM=${SMTP_FROM:-}
       - ALERT_EMAIL_TO=${SMTP_TO:-}
+    entrypoint: /etc/alertmanager/entrypoint.sh
     command:
       - '--config.file=/etc/alertmanager/alertmanager.yml'
       - '--storage.path=/alertmanager'
