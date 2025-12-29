@@ -65,7 +65,7 @@ layout = dbc.Container([
 @callback(
     Output('signal-stats-cards', 'children'),
     [Input('signals-symbol-selector', 'value'),
-     Input('interval-component', 'n_intervals')]
+     Input('interval-fast', 'n_intervals')]  # 使用快速刷新
 )
 def update_signal_stats(symbol, n):
     """更新信號統計卡片"""
@@ -121,7 +121,7 @@ def update_signal_stats(symbol, n):
 @callback(
     Output('signals-chart', 'figure'),
     [Input('signals-symbol-selector', 'value'),
-     Input('interval-component', 'n_intervals')]
+     Input('interval-fast', 'n_intervals')]  # 使用快速刷新
 )
 def update_signals_chart(symbol, n):
     """更新信號圖表"""
@@ -225,7 +225,7 @@ def update_signals_chart(symbol, n):
 @callback(
     Output('signals-table', 'children'),
     [Input('signals-symbol-selector', 'value'),
-     Input('interval-component', 'n_intervals')]
+     Input('interval-fast', 'n_intervals')]  # 使用快速刷新
 )
 def update_signals_table(symbol, n):
     """更新信號列表"""

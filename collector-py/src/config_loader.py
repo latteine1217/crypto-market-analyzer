@@ -153,10 +153,17 @@ class ConfigLoader:
             config_dir: 配置檔目錄，預設為 PROJECT_ROOT/configs/collector
         """
         if config_dir is None:
-            # 從當前檔案位置推導專案根目錄
-            current_file = Path(__file__)
-            project_root = current_file.parent.parent.parent
-            config_dir = project_root / "configs" / "collector"
+            # 優先使用環境變數
+            import os
+            env_config_dir = os.getenv('COLLECTOR_CONFIG_DIR')
+
+            if env_config_dir:
+                config_dir = Path(env_config_dir)
+            else:
+                # 從當前檔案位置推導專案根目錄
+                current_file = Path(__file__)
+                project_root = current_file.parent.parent.parent
+                config_dir = project_root / "configs" / "collector"
 
         self.config_dir = Path(config_dir)
         if not self.config_dir.exists():

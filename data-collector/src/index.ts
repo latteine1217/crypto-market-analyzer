@@ -8,6 +8,7 @@ import { BinanceWSClient } from './binance_ws/BinanceWSClient';
 import { OrderBookManager } from './orderbook_handlers/OrderBookManager';
 import { RedisQueue } from './queues/RedisQueue';
 import { DBFlusher } from './database/DBFlusher';
+import { getMetricsServer, MetricsServer } from './metrics/MetricsServer';
 import {
   WSConfig,
   QueueMessage,
@@ -21,10 +22,19 @@ class WebSocketCollector {
   private orderBookManager: OrderBookManager;
   private redisQueue: RedisQueue;
   private dbFlusher: DBFlusher;
+  private metricsServer: MetricsServer;
   private snapshotTimer: NodeJS.Timeout | null = null;
   private statsTimer: NodeJS.Timeout | null = null;
+  private startTime: number;
 
   constructor() {
+    this.startTime = Date.now();
+
+    // 初始化 Prometheus Metrics Server
+    const metricsPort = parseInt(process.env.METRICS_PORT || '8001');
+    this.metricsServer = getMetricsServer(metricsPort);
+    this.metricsServer.start();
+
     this.orderBookManager = new OrderBookManager();
     this.redisQueue = new RedisQueue();
     this.dbFlusher = new DBFlusher(config.flush);
@@ -105,21 +115,25 @@ class WebSocketCollector {
     // 連接成功
     this.wsClient.on('connected', () => {
       log.info('✅ WebSocket connected');
+      this.metricsServer.wsConnectionStatus.set({ exchange: 'binance' }, 1);
     });
 
     // 連接斷開
     this.wsClient.on('disconnected', (code, reason) => {
       log.warn('⚠️ WebSocket disconnected', { code, reason });
+      this.metricsServer.wsConnectionStatus.set({ exchange: 'binance' }, 0);
     });
 
     // 重連中
     this.wsClient.on('reconnecting', (attempt) => {
       log.info(`🔄 Reconnecting... (attempt ${attempt})`);
+      this.metricsServer.wsReconnectsTotal.inc({ exchange: 'binance' });
     });
 
     // 錯誤
     this.wsClient.on('error', (error) => {
       log.error('❌ WebSocket error', error);
+      this.metricsServer.wsErrorsTotal.inc({ exchange: 'binance', error_type: 'connection' });
     });
 
     // 收到訊息
@@ -132,23 +146,57 @@ class WebSocketCollector {
    * 處理訊息
    */
   private async handleMessage(message: QueueMessage): Promise<void> {
+    const startTime = Date.now();
+
     try {
+      // 記錄訊息計數
+      this.metricsServer.wsMessagesTotal.inc({
+        exchange: message.exchange,
+        type: message.type
+      });
+
       if (message.type === MessageType.TRADE) {
         // 直接推送到 Redis
         await this.redisQueue.push(message);
+
+        // 記錄交易數據收集
+        const tradeData = message.data as any;
+        if (tradeData.symbol) {
+          this.metricsServer.tradesCollectedTotal.inc({
+            exchange: message.exchange,
+            symbol: tradeData.symbol
+          });
+        }
 
       } else if (message.type === MessageType.ORDERBOOK_UPDATE) {
         // 更新本地訂單簿
         const update = message.data as OrderBookUpdate;
         const updated = this.orderBookManager.processUpdate(update);
 
-        if (!updated) {
+        if (updated) {
+          // 記錄訂單簿更新
+          this.metricsServer.orderbookUpdatesTotal.inc({
+            exchange: message.exchange,
+            symbol: update.symbol
+          });
+        } else {
           log.debug(`Order book update skipped for ${update.symbol}`);
         }
       }
 
+      // 記錄處理時長
+      const duration = (Date.now() - startTime) / 1000;
+      this.metricsServer.wsMessageProcessingDuration.observe({
+        exchange: message.exchange,
+        type: message.type
+      }, duration);
+
     } catch (error) {
       log.error('Failed to handle message', error);
+      this.metricsServer.wsErrorsTotal.inc({
+        exchange: 'binance',
+        error_type: 'message_processing'
+      });
     }
   }
 
@@ -160,6 +208,45 @@ class WebSocketCollector {
 
     this.snapshotTimer = this.orderBookManager.startPeriodicSnapshots(
       async (snapshot: OrderBookSnapshot) => {
+        // 記錄訂單簿快照
+        this.metricsServer.orderbookSnapshotsTotal.inc({
+          exchange: 'binance',
+          symbol: snapshot.symbol
+        });
+
+        // 更新訂單簿價格 metrics
+        if (snapshot.bids && snapshot.bids.length > 0) {
+          this.metricsServer.orderbookBestBidPrice.set({
+            exchange: 'binance',
+            symbol: snapshot.symbol
+          }, snapshot.bids[0].price);
+        }
+
+        if (snapshot.asks && snapshot.asks.length > 0) {
+          this.metricsServer.orderbookBestAskPrice.set({
+            exchange: 'binance',
+            symbol: snapshot.symbol
+          }, snapshot.asks[0].price);
+        }
+
+        // 計算並記錄價差
+        if (snapshot.bids && snapshot.asks && snapshot.bids.length > 0 && snapshot.asks.length > 0) {
+          const bestBid = snapshot.bids[0].price;
+          const bestAsk = snapshot.asks[0].price;
+          const spread = bestAsk - bestBid;
+          const spreadBps = (spread / bestBid) * 10000;
+
+          this.metricsServer.orderbookSpread.set({
+            exchange: 'binance',
+            symbol: snapshot.symbol
+          }, spread);
+
+          this.metricsServer.orderbookSpreadBps.set({
+            exchange: 'binance',
+            symbol: snapshot.symbol
+          }, spreadBps);
+        }
+
         // 推送到 Redis 佇列
         const message: QueueMessage = {
           type: MessageType.ORDERBOOK_SNAPSHOT,
@@ -169,6 +256,11 @@ class WebSocketCollector {
         };
 
         await this.redisQueue.push(message);
+
+        // 記錄 Redis 推送
+        this.metricsServer.redisQueuePushTotal.inc({
+          queue_type: 'orderbook_snapshot'
+        });
 
         // 同時儲存到 Redis Hash（供即時查詢）
         await this.redisQueue.saveOrderBookSnapshot(
@@ -188,14 +280,26 @@ class WebSocketCollector {
         return;
       }
 
+      // 更新 uptime metric
+      const uptimeSeconds = (Date.now() - this.startTime) / 1000;
+      this.metricsServer.collectorUptime.set(uptimeSeconds);
+
       // WebSocket 統計
       const wsStats = this.wsClient.getStats();
 
       // Redis 佇列統計
       const queueSizes = await this.redisQueue.getAllQueueSizes();
 
+      // 更新 Redis queue size metrics
+      for (const [type, size] of queueSizes.entries()) {
+        this.metricsServer.redisQueueSize.set({ queue_type: type }, size);
+      }
+
       // DB Flusher 統計
       const dbStats = this.dbFlusher.getStats();
+
+      // 更新 DB metrics
+      this.metricsServer.dbIsFlushing.set(dbStats.isFlushing ? 1 : 0);
 
       // 訂單簿統計
       const obStats: any[] = [];
@@ -272,6 +376,9 @@ class WebSocketCollector {
     // 關閉資源
     await this.dbFlusher.shutdown();
     this.orderBookManager.cleanup();
+
+    // 停止 metrics server
+    this.metricsServer.stop();
 
     log.info('✅ WebSocket Collector stopped');
   }

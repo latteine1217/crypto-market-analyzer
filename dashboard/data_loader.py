@@ -1,7 +1,7 @@
 """
 資料載入模組
 
-負責從 TimescaleDB 讀取各類資料
+負責從 TimescaleDB 讀取各類資料，並使用 Redis 快取
 """
 import pandas as pd
 import psycopg2
@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List
 import sys
 from pathlib import Path
+from loguru import logger
 
 # 添加 data-analyzer 路徑
 sys.path.insert(0, str(Path(__file__).parent.parent / 'data-analyzer' / 'src'))
@@ -20,6 +21,8 @@ from strategies.fractal_pattern_strategy import (
     CombinedFractalMAStrategy
 )
 
+from cache_manager import CacheManager
+
 
 class DataLoader:
     """資料載入器"""
@@ -30,9 +33,22 @@ class DataLoader:
         port: int = 5432,
         database: str = 'crypto_db',
         user: str = 'crypto',
-        password: str = 'crypto_pass'
+        password: str = 'crypto_pass',
+        use_cache: bool = True,
+        cache_ttl: int = 2  # 快取 2 秒（高頻刷新下的短暫快取）
     ):
-        """初始化資料庫連接"""
+        """
+        初始化資料庫連接與快取
+
+        Args:
+            host: PostgreSQL 主機
+            port: PostgreSQL 端口
+            database: 資料庫名稱
+            user: 使用者名稱
+            password: 密碼
+            use_cache: 是否啟用快取
+            cache_ttl: 快取過期時間（秒）
+        """
         self.conn_params = {
             'host': host,
             'port': port,
@@ -40,6 +56,15 @@ class DataLoader:
             'user': user,
             'password': password
         }
+
+        # 初始化快取
+        self.cache = None
+        if use_cache:
+            try:
+                self.cache = CacheManager(default_ttl=cache_ttl)
+            except Exception as e:
+                logger.warning(f"快取初始化失敗，將不使用快取: {e}")
+                self.cache = None
 
     def get_connection(self):
         """取得資料庫連接"""
@@ -107,7 +132,7 @@ class DataLoader:
         limit: int = 500
     ) -> pd.DataFrame:
         """
-        取得 OHLCV 資料
+        取得 OHLCV 資料（支援快取）
 
         Args:
             exchange: 交易所名稱
@@ -118,6 +143,14 @@ class DataLoader:
         Returns:
             DataFrame with OHLCV data
         """
+        # 檢查快取
+        if self.cache and self.cache.enabled:
+            cache_key = self.cache.make_key('ohlcv', exchange, symbol, timeframe, limit)
+            cached_df = self.cache.get_df(cache_key)
+            if cached_df is not None:
+                return cached_df
+
+        # 查詢資料庫
         query = """
             SELECT
                 o.open_time as timestamp,
@@ -146,6 +179,11 @@ class DataLoader:
             df = df.sort_values('timestamp').reset_index(drop=True)
             df['timestamp'] = pd.to_datetime(df['timestamp'])
 
+        # 儲存到快取
+        if self.cache and self.cache.enabled and not df.empty:
+            cache_key = self.cache.make_key('ohlcv', exchange, symbol, timeframe, limit)
+            self.cache.set_df(cache_key, df)
+
         return df
 
     def get_ohlcv_with_indicators(
@@ -167,7 +205,7 @@ class DataLoader:
             return df
 
         # 計算技術指標
-        df = TechnicalIndicators.add_all_indicators(df)
+        df = TechnicalIndicators.calculate_all(df)
 
         return df
 
@@ -194,12 +232,12 @@ class DataLoader:
         if df.empty:
             return {}
 
-        # 預設策略
+        # 預設策略（暫時只使用 MACD，其他策略需要額外的技術指標方法）
         if strategies is None:
             strategies = [
                 MACDStrategy(name="MACD_Cross"),
-                FractalBreakoutStrategy(name="Fractal_Breakout"),
-                CombinedFractalMAStrategy(name="Fractal_MA")
+                # FractalBreakoutStrategy(name="Fractal_Breakout"),  # 需要 identify_williams_fractal
+                # CombinedFractalMAStrategy(name="Fractal_MA")  # 需要 identify_williams_fractal
             ]
 
         # 生成信號
@@ -225,31 +263,59 @@ class DataLoader:
         Returns:
             DataFrame with timestamp, bids, asks
         """
+        market_id = self._get_market_id(exchange, symbol)
+        if market_id is None:
+            return pd.DataFrame()
+
         query = """
             SELECT
-                obs.timestamp,
-                obs.bids,
-                obs.asks
-            FROM orderbook_snapshots obs
-            JOIN markets m ON obs.market_id = m.id
-            JOIN exchanges e ON m.exchange_id = e.id
-            WHERE e.name = %s
-              AND m.symbol = %s
-            ORDER BY obs.timestamp DESC
+                timestamp,
+                bids,
+                asks
+            FROM orderbook_snapshots
+            WHERE market_id = %s
+            ORDER BY timestamp DESC
             LIMIT %s
         """
 
         with self.get_connection() as conn:
-            df = pd.read_sql_query(query, conn, params=[exchange, symbol, limit])
+            df = pd.read_sql_query(query, conn, params=[market_id, limit])
 
         if not df.empty:
             df['timestamp'] = pd.to_datetime(df['timestamp'])
 
         return df
 
+    def _get_market_id(self, exchange: str, symbol: str) -> Optional[int]:
+        cache_key = None
+        if self.cache and self.cache.enabled:
+            cache_key = self.cache.make_key('market_id', exchange, symbol)
+            cached = self.cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+        query = """
+            SELECT m.id
+            FROM markets m
+            JOIN exchanges e ON m.exchange_id = e.id
+            WHERE e.name = %s
+              AND m.symbol = %s
+            LIMIT 1
+        """
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (exchange, symbol))
+                row = cur.fetchone()
+                market_id = row[0] if row else None
+
+        if market_id is not None and cache_key and self.cache:
+            self.cache.set(cache_key, market_id, ttl=60)
+
+        return market_id
+
     def get_market_summary(self, exchange: str, symbol: str) -> dict:
         """
-        取得市場摘要資訊
+        取得市場摘要資訊（支援快取）
 
         Returns:
             {
@@ -265,6 +331,13 @@ class DataLoader:
                 'latest_signals': {...}
             }
         """
+        # 檢查快取
+        if self.cache and self.cache.enabled:
+            cache_key = self.cache.make_key('market_summary', exchange, symbol)
+            cached = self.cache.get(cache_key)
+            if cached is not None:
+                return cached
+
         # 取得最新資料
         df = self.get_ohlcv_with_indicators(exchange, symbol, limit=500)
 
@@ -297,7 +370,7 @@ class DataLoader:
                     'time': str(non_none.index[-1])
                 }
 
-        return {
+        result = {
             'latest_price': float(latest['close']),
             'change_24h': float(change_24h),
             'volume_24h': float(volume_24h),
@@ -305,7 +378,14 @@ class DataLoader:
             'low_24h': float(low_24h),
             'macd': float(latest['macd']) if pd.notna(latest['macd']) else None,
             'macd_signal': float(latest['macd_signal']) if pd.notna(latest['macd_signal']) else None,
-            'ma_20': float(latest['ma_20']) if pd.notna(latest['ma_20']) else None,
-            'ma_60': float(latest['ma_60']) if pd.notna(latest['ma_60']) else None,
+            'ma_20': float(latest['sma_20']) if pd.notna(latest.get('sma_20')) else None,
+            'ma_60': float(latest['sma_50']) if pd.notna(latest.get('sma_50')) else None,  # 使用 sma_50 因為沒有 sma_60
             'latest_signals': latest_signals
         }
+
+        # 儲存到快取
+        if self.cache and self.cache.enabled:
+            cache_key = self.cache.make_key('market_summary', exchange, symbol)
+            self.cache.set(cache_key, result)
+
+        return result

@@ -74,12 +74,15 @@ class DataQualityChecker:
         end_time = datetime.now(timezone.utc)
         start_time = end_time - timedelta(hours=lookback_hours)
 
-        # 從資料庫抓取資料
-        ohlcv_data = self._fetch_ohlcv_from_db(
+        # 串流驗證以降低記憶體使用
+        row_iter = self._iter_ohlcv_from_db(
             market_id, timeframe, start_time, end_time
         )
+        validation_result = self.validator.validate_ohlcv_stream(
+            row_iter, timeframe, check_missing_intervals=False
+        )
 
-        if not ohlcv_data:
+        if validation_result.get('total_records', 0) == 0:
             logger.warning(f"No OHLCV data found for quality check")
             return {
                 'market_id': market_id,
@@ -90,10 +93,17 @@ class DataQualityChecker:
                 'warnings': []
             }
 
-        # 執行品質驗證
-        validation_result = self.validator.validate_ohlcv_batch(
-            ohlcv_data, timeframe
+        missing_intervals = self._fetch_missing_intervals_sql(
+            market_id, timeframe, start_time, end_time
         )
+        if missing_intervals:
+            warnings = validation_result.get('warnings', [])
+            warnings.append({
+                'type': 'missing_interval',
+                'count': len(missing_intervals),
+                'details': missing_intervals[:10]
+            })
+            validation_result['warnings'] = warnings
 
         # 記錄品質摘要到資料庫
         self.db.insert_quality_summary(
@@ -207,6 +217,99 @@ class DataQualityChecker:
             rows = cur.fetchall()
 
         return [list(row) for row in rows]
+
+    def _fetch_missing_intervals_sql(
+        self,
+        market_id: int,
+        timeframe: str,
+        start_time: datetime,
+        end_time: datetime
+    ) -> List[Dict]:
+        """
+        使用 SQL 端計算缺失區間，避免搬運大量資料到應用層
+        """
+        interval_map = {
+            '1m': '1 minute',
+            '5m': '5 minutes',
+            '15m': '15 minutes',
+            '1h': '1 hour',
+            '4h': '4 hours',
+            '1d': '1 day'
+        }
+        interval_literal = interval_map.get(timeframe, '1 minute')
+
+        query = f"""
+            WITH ordered AS (
+                SELECT
+                    open_time,
+                    LAG(open_time) OVER (ORDER BY open_time) AS prev_time
+                FROM ohlcv
+                WHERE market_id = %s
+                  AND timeframe = %s
+                  AND open_time >= %s
+                  AND open_time < %s
+            )
+            SELECT
+                prev_time AS start_time,
+                open_time AS end_time,
+                (EXTRACT(EPOCH FROM (open_time - prev_time))
+                 / EXTRACT(EPOCH FROM INTERVAL '{interval_literal}'))::int - 1
+                 AS missing_count,
+                (open_time - prev_time) AS actual_interval
+            FROM ordered
+            WHERE prev_time IS NOT NULL
+              AND open_time - prev_time > INTERVAL '{interval_literal}' * 1.5
+            ORDER BY start_time
+        """
+
+        with self.db.conn.cursor() as cur:
+            cur.execute(
+                query,
+                (market_id, timeframe, start_time, end_time)
+            )
+            rows = cur.fetchall()
+
+        return [
+            {
+                'start_time': row[0],
+                'end_time': row[1],
+                'missing_count': row[2],
+                'actual_interval': row[3]
+            }
+            for row in rows
+        ]
+
+    def _iter_ohlcv_from_db(
+        self,
+        market_id: int,
+        timeframe: str,
+        start_time: datetime,
+        end_time: datetime
+    ):
+        """
+        串流取得 OHLCV 資料，避免一次載入記憶體
+
+        Returns:
+            iterator yielding [timestamp_ms, open, high, low, close, volume]
+        """
+        with self.db.conn.cursor(name='ohlcv_stream') as cur:
+            cur.itersize = 10000
+            cur.execute(
+                """
+                SELECT
+                    EXTRACT(EPOCH FROM open_time) * 1000,
+                    open, high, low, close, volume
+                FROM ohlcv
+                WHERE market_id = %s
+                  AND timeframe = %s
+                  AND open_time >= %s
+                  AND open_time < %s
+                ORDER BY open_time ASC
+                """,
+                (market_id, timeframe, start_time, end_time)
+            )
+            for row in cur:
+                yield list(row)
 
     def _get_active_markets(self) -> List[Dict]:
         """

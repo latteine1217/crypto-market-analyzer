@@ -1,22 +1,29 @@
 services:
+  # ============================================
+  # 基礎設施服務
+  # ============================================
+
   # TimescaleDB - 時序數據優化的PostgreSQL
   db:
     image: timescale/timescaledb:latest-pg16
     container_name: crypto_timescaledb
     environment:
-      POSTGRES_USER: crypto
-      POSTGRES_PASSWORD: crypto_pass
-      POSTGRES_DB: crypto_db
+      POSTGRES_USER: ${POSTGRES_USER:-crypto}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-crypto_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-crypto_db}
+      TZ: ${TZ:-Asia/Taipei}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
       - ./database/schemas:/docker-entrypoint-initdb.d
+      - ./database/migrations:/migrations
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U crypto"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-crypto}"]
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
     networks:
       - crypto_network
 
@@ -24,8 +31,9 @@ services:
   redis:
     image: redis:7-alpine
     container_name: crypto_redis
+    command: redis-server --appendonly yes
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -33,8 +41,307 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
     networks:
       - crypto_network
+
+  # ============================================
+  # 資料收集服務
+  # ============================================
+
+  # Python Collector - REST API 資料收集
+  collector:
+    build:
+      context: ./collector-py
+      dockerfile: Dockerfile
+    container_name: crypto_collector
+    environment:
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-crypto}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-crypto_pass}
+      - POSTGRES_DB=${POSTGRES_DB:-crypto_db}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=${REDIS_DB:-0}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - TZ=${TZ:-Asia/Taipei}
+      - BINANCE_API_KEY=${BINANCE_API_KEY:-}
+      - BINANCE_API_SECRET=${BINANCE_API_SECRET:-}
+      - ETHERSCAN_API_KEY=${ETHERSCAN_API_KEY:-}
+      - BSCSCAN_API_KEY=${BSCSCAN_API_KEY:-}
+      - COLLECTOR_CONFIG_DIR=/app/configs/collector
+    ports:
+      - "${COLLECTOR_METRICS_PORT:-8000}:8000"  # Prometheus metrics
+    volumes:
+      - ./collector-py/src:/app/src
+      - ./collector-py/logs:/app/logs
+      - ./configs:/app/configs:ro
+      - ./shared:/app/shared:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - crypto_network
+
+  # Whale Tracker - 鯨魚追蹤排程器
+  whale-tracker:
+    build:
+      context: ./collector-py
+      dockerfile: Dockerfile
+    container_name: crypto_whale_tracker
+    command: python3 whale_tracker_scheduler.py --interval 10
+    environment:
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-crypto}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-crypto_pass}
+      - POSTGRES_DB=${POSTGRES_DB:-crypto_db}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - TZ=${TZ:-Asia/Taipei}
+      - ETHERSCAN_API_KEY=${ETHERSCAN_API_KEY:-}
+      - BSCSCAN_API_KEY=${BSCSCAN_API_KEY:-}
+      - TRONSCAN_API_KEY=${TRONSCAN_API_KEY:-}
+    volumes:
+      - ./collector-py:/app
+      - ./collector-py/logs:/app/logs
+      - ./configs:/app/configs:ro
+      - ./shared:/app/shared:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - crypto_network
+
+  # Node.js WebSocket Collector - 實時資料收集
+  ws-collector:
+    build:
+      context: ./data-collector
+      dockerfile: Dockerfile
+    container_name: crypto_ws_collector
+    environment:
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-crypto_db}
+      - POSTGRES_USER=${POSTGRES_USER:-crypto}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-crypto_pass}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=${REDIS_DB:-0}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TZ=${TZ:-Asia/Taipei}
+      - SYMBOLS=${WS_SYMBOLS:-BTCUSDT,ETHUSDT}
+      - STREAMS=${WS_STREAMS:-trade,depth}
+      - METRICS_PORT=${WS_COLLECTOR_METRICS_PORT:-8001}
+    ports:
+      - "${WS_COLLECTOR_METRICS_PORT:-8001}:8001"  # Prometheus metrics
+    volumes:
+      - ./data-collector/src:/app/src
+      - ./data-collector/logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - crypto_network
+
+  # ============================================
+  # 分析與回測服務
+  # ============================================
+
+  # Analyzer - 批次分析與回測
+  analyzer:
+    build:
+      context: ./data-analyzer
+      dockerfile: Dockerfile
+    container_name: crypto_analyzer
+    environment:
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-crypto}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-crypto_pass}
+      - POSTGRES_DB=${POSTGRES_DB:-crypto_db}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - TZ=${TZ:-Asia/Taipei}
+    volumes:
+      - ./data-analyzer:/workspace
+      - ./shared:/workspace/shared
+      - ./configs:/workspace/configs:ro
+      - ./models:/workspace/models
+      - ./results:/workspace/results
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: "no"  # 批次任務不自動重啟
+    networks:
+      - crypto_network
+    command: >
+      bash -c "echo 'Analyzer service ready. Use docker exec to run tasks.'"
+
+  # Report Scheduler - 定期報表生成
+  report-scheduler:
+    build:
+      context: ./data-analyzer
+      dockerfile: Dockerfile
+    container_name: crypto_report_scheduler
+    environment:
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-crypto}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-crypto_pass}
+      - POSTGRES_DB=${POSTGRES_DB:-crypto_db}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - TZ=${TZ:-Asia/Taipei}
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_FROM=${SMTP_FROM:-}
+      - SMTP_TO=${SMTP_TO:-}
+    volumes:
+      - ./data-analyzer:/workspace
+      - ./shared:/workspace/shared
+      - ./configs:/workspace/configs:ro
+      - ./scripts:/workspace/scripts:ro
+      - ./reports:/workspace/reports
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - crypto_network
+    command: python /workspace/scripts/report_scheduler.py
+
+  # ============================================
+  # 監控服務
+  # ============================================
+
+  # Prometheus - 指標收集與告警
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: crypto_prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./monitoring/prometheus:/etc/prometheus
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+    networks:
+      - crypto_network
+
+  # Grafana - 視覺化監控面板
+  grafana:
+    image: grafana/grafana:latest
+    container_name: crypto_grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_INSTALL_PLUGINS=
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    networks:
+      - crypto_network
+
+  # Alertmanager - 告警管理
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: crypto_alertmanager
+    ports:
+      - "${ALERTMANAGER_PORT:-9093}:9093"
+    volumes:
+      - ./monitoring/alertmanager:/etc/alertmanager
+      - alertmanager_data:/alertmanager
+    environment:
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_FROM=${SMTP_FROM:-}
+      - ALERT_EMAIL_TO=${SMTP_TO:-}
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    restart: unless-stopped
+    networks:
+      - crypto_network
+
+  # Node Exporter - 系統指標（macOS 兼容版本）
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: crypto_node_exporter
+    ports:
+      - "9100:9100"
+    # macOS 不支持 rslave，使用簡化配置
+    # 提供基本的系統指標
+    pid: host
+    restart: unless-stopped
+    networks:
+      - crypto_network
+
+  # Postgres Exporter - PostgreSQL 指標
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: crypto_postgres_exporter
+    ports:
+      - "9187:9187"
+    environment:
+      - DATA_SOURCE_NAME=postgresql://${POSTGRES_USER:-crypto}:${POSTGRES_PASSWORD:-crypto_pass}@db:5432/${POSTGRES_DB:-crypto_db}?sslmode=disable
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - crypto_network
+
+  # Redis Exporter - Redis 指標
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: crypto_redis_exporter
+    ports:
+      - "9121:9121"
+    environment:
+      - REDIS_ADDR=redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - crypto_network
+
+  # ============================================
+  # 開發與管理工具
+  # ============================================
 
   # Jupyter Lab - 數據分析與模型實驗
   jupyter:
@@ -43,33 +350,44 @@ services:
       dockerfile: Dockerfile
     container_name: crypto_jupyter
     ports:
-      - "8888:8888"
+      - "${JUPYTER_PORT:-8888}:8888"
     volumes:
       - ./data-analyzer:/workspace
       - ./shared:/workspace/shared
+      - ./configs:/workspace/configs:ro
+      - ./models:/workspace/models
+      - ./results:/workspace/results
     environment:
       - POSTGRES_HOST=db
       - POSTGRES_PORT=5432
-      - POSTGRES_USER=crypto
-      - POSTGRES_PASSWORD=crypto_pass
-      - POSTGRES_DB=crypto_db
+      - POSTGRES_USER=${POSTGRES_USER:-crypto}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-crypto_pass}
+      - POSTGRES_DB=${POSTGRES_DB:-crypto_db}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - TZ=${TZ:-Asia/Taipei}
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+    restart: unless-stopped
     networks:
       - crypto_network
     command: >
       bash -c "jupyter lab --ip=0.0.0.0 --port=8888 --no-browser
-      --allow-root --NotebookApp.token='' --NotebookApp.password=''"
+      --allow-root --NotebookApp.token='${JUPYTER_TOKEN:-}' --NotebookApp.password='${JUPYTER_PASSWORD:-}'"
 
 volumes:
   db_data:
     driver: local
   redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  alertmanager_data:
     driver: local
 
 networks:

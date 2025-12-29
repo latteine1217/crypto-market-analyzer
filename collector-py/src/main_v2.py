@@ -31,6 +31,7 @@ from error_handler import (
     ErrorClassifier,
     global_failure_tracker
 )
+from metrics_exporter import start_metrics_server, CollectorMetrics
 
 
 # 配置日誌
@@ -55,6 +56,11 @@ class ConfigDrivenCollector:
 
     def __init__(self):
         """初始化收集器"""
+        # 啟動 Prometheus Metrics Server
+        metrics_port = int(settings.metrics_port) if hasattr(settings, 'metrics_port') else 8000
+        self.metrics = start_metrics_server(port=metrics_port)
+        logger.info(f"Metrics server started on port {metrics_port}")
+
         # 載入配置
         self.config_loader = ConfigLoader()
         self.collector_configs = self.config_loader.load_all_collector_configs()
@@ -150,12 +156,42 @@ class ConfigDrivenCollector:
                 endpoint='fetch_ohlcv'
             )
             def fetch_with_retry():
-                return connector.fetch_ohlcv(
-                    symbol=symbol,
-                    timeframe=timeframe,
-                    since=since,
-                    limit=1000
-                )
+                import time
+                start_time = time.time()
+                try:
+                    result = connector.fetch_ohlcv(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        since=since,
+                        limit=1000
+                    )
+                    duration = time.time() - start_time
+                    # 記錄成功的 API 請求
+                    self.metrics.record_api_request(
+                        exchange=exchange_name,
+                        endpoint='fetch_ohlcv',
+                        status='success',
+                        duration=duration
+                    )
+                    return result
+                except Exception as e:
+                    duration = time.time() - start_time
+                    # 記錄失敗的 API 請求
+                    self.metrics.record_api_request(
+                        exchange=exchange_name,
+                        endpoint='fetch_ohlcv',
+                        status='failed',
+                        duration=duration
+                    )
+                    # 分類錯誤類型並記錄
+                    error_class = ErrorClassifier.classify_error(e)
+                    error_type = error_class.error_type.value if error_class else 'unknown'
+                    self.metrics.record_api_error(
+                        exchange=exchange_name,
+                        endpoint='fetch_ohlcv',
+                        error_type=error_type
+                    )
+                    raise
 
             ohlcv = fetch_with_retry()
 
@@ -176,18 +212,68 @@ class ConfigDrivenCollector:
                         f"{len(validation_result['warnings'])} warnings"
                     )
 
+                    # 記錄驗證失敗
+                    for error in validation_result.get('errors', []):
+                        validation_type = error.get('type', 'unknown')
+                        self.metrics.record_validation_failure(
+                            exchange=exchange_name,
+                            symbol=symbol,
+                            validation_type=validation_type
+                        )
+
                     # 根據配置決定如何處理驗證失敗
                     if config.error_handling.on_validation_error == 'skip_and_log':
                         logger.warning("Skipping invalid data batch")
                         return
 
             # 寫入資料庫
-            count = self.db.insert_ohlcv_batch(market_id, timeframe, ohlcv)
-            logger.success(f"Successfully saved {count} candles to database")
+            try:
+                count = self.db.insert_ohlcv_batch(market_id, timeframe, ohlcv)
+                logger.success(f"Successfully saved {count} candles to database")
+
+                # 記錄成功的資料庫寫入
+                self.metrics.record_db_write(
+                    table='ohlcv',
+                    status='success',
+                    count=count
+                )
+
+                # 記錄 OHLCV 數據收集
+                self.metrics.record_ohlcv_collection(
+                    exchange=exchange_name,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    count=count
+                )
+
+                # 更新最後成功收集時間
+                import time
+                self.metrics.update_last_collection_time(
+                    exchange=exchange_name,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    timestamp=time.time()
+                )
+
+            except Exception as e:
+                logger.error(f"Database write failed: {e}")
+                self.metrics.record_db_write(
+                    table='ohlcv',
+                    status='failed'
+                )
+                raise
 
             # 記錄成功（重置連續失敗計數）
             failure_key = f"{exchange_name}:{symbol}:{timeframe}"
             global_failure_tracker.record_success(failure_key)
+
+            # 更新連續失敗計數為 0
+            self.metrics.update_consecutive_failures(
+                exchange=exchange_name,
+                symbol=symbol,
+                timeframe=timeframe,
+                count=0
+            )
 
         except Exception as e:
             logger.error(f"Error in collect_ohlcv for {exchange_name}/{symbol}: {e}")
@@ -195,6 +281,14 @@ class ConfigDrivenCollector:
             # 記錄連續失敗
             failure_key = f"{exchange_name}:{symbol}:{timeframe}"
             count = global_failure_tracker.record_failure(failure_key)
+
+            # 更新 metrics 中的連續失敗計數
+            self.metrics.update_consecutive_failures(
+                exchange=exchange_name,
+                symbol=symbol,
+                timeframe=timeframe,
+                count=count
+            )
 
             if count >= config.error_handling.max_consecutive_failures:
                 logger.critical(
@@ -229,6 +323,21 @@ class ConfigDrivenCollector:
             create_backfill_tasks=True
         )
 
+        # 更新品質 metrics
+        for result in results:
+            if 'exchange' in result and 'symbol' in result:
+                score = result.get('score', 0)
+                missing_rate = result.get('missing_rate', 0)
+                timeframe = result.get('timeframe', '1m')
+
+                self.metrics.update_data_quality(
+                    exchange=result['exchange'],
+                    symbol=result['symbol'],
+                    timeframe=timeframe,
+                    score=score,
+                    missing_rate=missing_rate
+                )
+
         # 統計結果
         total = len(results)
         valid = sum(1 for r in results if r.get('valid', False))
@@ -249,6 +358,9 @@ class ConfigDrivenCollector:
 
         # 取得待執行的補資料任務
         tasks = self.backfill_scheduler.get_pending_tasks(limit=5)
+
+        # 更新待處理任務數
+        self.metrics.update_backfill_stats(pending=len(tasks) if tasks else 0)
 
         if not tasks:
             logger.info("No pending backfill tasks")
@@ -282,6 +394,9 @@ class ConfigDrivenCollector:
                     task_id, 'completed', actual_records=0
                 )
 
+                # 記錄補資料完成
+                self.metrics.record_backfill_completion(status='success')
+
                 logger.success(f"Backfill task #{task_id} completed")
 
             except Exception as e:
@@ -289,6 +404,9 @@ class ConfigDrivenCollector:
                 self.backfill_scheduler.update_task_status(
                     task_id, 'failed', error_message=str(e)
                 )
+
+                # 記錄補資料失敗
+                self.metrics.record_backfill_completion(status='failed')
 
         logger.info("=" * 80 + "\n")
 
@@ -334,6 +452,9 @@ class ConfigDrivenCollector:
 
     def cleanup(self):
         """清理資源"""
+        # 設定停止狀態
+        self.metrics.set_running_status(False)
+
         self.db.close()
         self.backfill_scheduler.close()
         self.quality_checker.close()

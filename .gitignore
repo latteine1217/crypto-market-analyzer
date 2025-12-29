@@ -32,6 +32,8 @@ build/
 .env
 .env.local
 .env.*.local
+.env.backup.*
+*.backup
 
 # IDEs
 .vscode/
@@ -49,6 +51,21 @@ build/
 # Logs
 logs/
 *.log
+
+# Node.js
+node_modules/
+package-lock.json
+.npm
+
+# Backup files
+*.bak
+*.bak2
+*.bak3
+*.bak4
+
+# Test results and monitoring data
+monitoring/test_results/
+reports/generated/
 
 # Docker
 docker-compose.override.yml

@@ -1,0 +1,359 @@
+{
+  "dashboard": {
+    "title": "Long Run Test - Stability & Performance",
+    "tags": ["testing", "stability", "performance"],
+    "timezone": "browser",
+    "editable": true,
+    "graphTooltip": 1,
+    "time": {
+      "from": "now-6h",
+      "to": "now"
+    },
+    "refresh": "30s",
+    "panels": [
+      {
+        "id": 1,
+        "title": "System Overview",
+        "type": "row",
+        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0}
+      },
+      {
+        "id": 2,
+        "title": "Container Status",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "count(up{job=~\"collector|ws-collector|postgres|redis\"} == 1)",
+            "legendFormat": "Running"
+          },
+          {
+            "expr": "count(up{job=~\"collector|ws-collector|postgres|redis\"} == 0)",
+            "legendFormat": "Down"
+          }
+        ],
+        "gridPos": {"h": 4, "w": 6, "x": 0, "y": 1},
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "red"},
+                {"value": 1, "color": "green"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 3,
+        "title": "Test Duration",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "time() - min(process_start_time_seconds)",
+            "legendFormat": "Uptime"
+          }
+        ],
+        "gridPos": {"h": 4, "w": 6, "x": 6, "y": 1},
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s"
+          }
+        }
+      },
+      {
+        "id": 4,
+        "title": "Active Alerts",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "count(ALERTS{alertstate=\"firing\"})",
+            "legendFormat": "Firing"
+          }
+        ],
+        "gridPos": {"h": 4, "w": 6, "x": 12, "y": 1},
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "green"},
+                {"value": 1, "color": "yellow"},
+                {"value": 5, "color": "red"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 5,
+        "title": "Data Collection Rate",
+        "type": "gauge",
+        "targets": [
+          {
+            "expr": "rate(collector_db_writes_total[5m])",
+            "legendFormat": "writes/sec"
+          }
+        ],
+        "gridPos": {"h": 4, "w": 6, "x": 18, "y": 1},
+        "fieldConfig": {
+          "defaults": {
+            "unit": "rps",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "red"},
+                {"value": 50, "color": "yellow"},
+                {"value": 100, "color": "green"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 10,
+        "title": "System Resources",
+        "type": "row",
+        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 5}
+      },
+      {
+        "id": 11,
+        "title": "CPU Usage",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "100 - (avg by (instance) (irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+            "legendFormat": "System CPU"
+          },
+          {
+            "expr": "rate(process_cpu_seconds_total{job=\"collector\"}[5m]) * 100",
+            "legendFormat": "Collector CPU"
+          },
+          {
+            "expr": "rate(process_cpu_seconds_total{job=\"ws-collector\"}[5m]) * 100",
+            "legendFormat": "WS Collector CPU"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 6},
+        "yaxes": [
+          {"format": "percent", "min": 0, "max": 100}
+        ]
+      },
+      {
+        "id": 12,
+        "title": "Memory Usage",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100",
+            "legendFormat": "System Memory"
+          },
+          {
+            "expr": "process_resident_memory_bytes{job=\"collector\"} / 1024 / 1024",
+            "legendFormat": "Collector Memory (MB)"
+          },
+          {
+            "expr": "process_resident_memory_bytes{job=\"ws-collector\"} / 1024 / 1024",
+            "legendFormat": "WS Collector Memory (MB)"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 6},
+        "yaxes": [
+          {"format": "percent"}
+        ]
+      },
+      {
+        "id": 13,
+        "title": "Disk Usage",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "(node_filesystem_size_bytes{mountpoint=\"/\"} - node_filesystem_avail_bytes{mountpoint=\"/\"}) / node_filesystem_size_bytes{mountpoint=\"/\"} * 100",
+            "legendFormat": "Disk Used %"
+          },
+          {
+            "expr": "node_filesystem_avail_bytes{mountpoint=\"/\"} / 1024 / 1024 / 1024",
+            "legendFormat": "Available (GB)"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 14},
+        "yaxes": [
+          {"format": "percent"}
+        ]
+      },
+      {
+        "id": 14,
+        "title": "Network I/O",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(node_network_receive_bytes_total[5m]) / 1024",
+            "legendFormat": "RX (KB/s)"
+          },
+          {
+            "expr": "rate(node_network_transmit_bytes_total[5m]) / 1024",
+            "legendFormat": "TX (KB/s)"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 14},
+        "yaxes": [
+          {"format": "KBs"}
+        ]
+      },
+      {
+        "id": 20,
+        "title": "Database Performance",
+        "type": "row",
+        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 22}
+      },
+      {
+        "id": 21,
+        "title": "Database Connections",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "pg_stat_activity_count",
+            "legendFormat": "Active Connections"
+          },
+          {
+            "expr": "pg_settings_max_connections",
+            "legendFormat": "Max Connections"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 8, "x": 0, "y": 23}
+      },
+      {
+        "id": 22,
+        "title": "Database Write Rate",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(collector_db_writes_total[5m])",
+            "legendFormat": "Writes/sec"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 8, "x": 8, "y": 23}
+      },
+      {
+        "id": 23,
+        "title": "Database Size",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "pg_database_size_bytes{datname=\"crypto_db\"} / 1024 / 1024 / 1024",
+            "legendFormat": "DB Size (GB)"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 8, "x": 16, "y": 23},
+        "yaxes": [
+          {"format": "bytes"}
+        ]
+      },
+      {
+        "id": 30,
+        "title": "Redis Performance",
+        "type": "row",
+        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 31}
+      },
+      {
+        "id": 31,
+        "title": "Redis Memory",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "redis_memory_used_bytes / 1024 / 1024",
+            "legendFormat": "Used (MB)"
+          },
+          {
+            "expr": "redis_memory_max_bytes / 1024 / 1024",
+            "legendFormat": "Max (MB)"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 8, "x": 0, "y": 32}
+      },
+      {
+        "id": 32,
+        "title": "Redis Operations",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(redis_commands_processed_total[5m])",
+            "legendFormat": "Commands/sec"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 8, "x": 8, "y": 32}
+      },
+      {
+        "id": 33,
+        "title": "Redis Connections",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "redis_connected_clients",
+            "legendFormat": "Connected Clients"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 8, "x": 16, "y": 32}
+      },
+      {
+        "id": 40,
+        "title": "Data Quality",
+        "type": "row",
+        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 40}
+      },
+      {
+        "id": 41,
+        "title": "API Error Rate",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(collector_api_errors_total[5m]) / rate(collector_api_requests_total[5m]) * 100",
+            "legendFormat": "Error Rate %"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 41},
+        "alert": {
+          "conditions": [
+            {
+              "evaluator": {"params": [10], "type": "gt"},
+              "operator": {"type": "and"},
+              "query": {"params": ["A", "5m", "now"]},
+              "reducer": {"type": "avg"},
+              "type": "query"
+            }
+          ]
+        }
+      },
+      {
+        "id": 42,
+        "title": "Data Missing Rate",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "collector_missing_data_rate * 100",
+            "legendFormat": "{{ symbol }}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 41}
+      },
+      {
+        "id": 50,
+        "title": "Container Restarts",
+        "type": "row",
+        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 49}
+      },
+      {
+        "id": 51,
+        "title": "Container Restart Count",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "changes(container_start_time_seconds[1h])",
+            "legendFormat": "{{ name }}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 50}
+      }
+    ]
+  }
+}

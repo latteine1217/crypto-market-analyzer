@@ -32,7 +32,11 @@ layout = dbc.Container([
             dbc.Card([
                 dbc.CardHeader("Price Charts"),
                 dbc.CardBody([
-                    dcc.Graph(id='overview-price-chart', config={'displayModeBar': False})
+                    dcc.Loading(
+                        id="loading-price-chart",
+                        type="circle",
+                        children=dcc.Graph(id='overview-price-chart', config={'displayModeBar': False})
+                    )
                 ])
             ])
         ], width=12)
@@ -44,7 +48,11 @@ layout = dbc.Container([
             dbc.Card([
                 dbc.CardHeader("Technical Indicators Summary"),
                 dbc.CardBody([
-                    html.Div(id='technical-summary')
+                    dcc.Loading(
+                        id="loading-technical-summary",
+                        type="default",
+                        children=html.Div(id='technical-summary')
+                    )
                 ])
             ])
         ], width=12)
@@ -54,10 +62,10 @@ layout = dbc.Container([
 
 @callback(
     Output('market-cards', 'children'),
-    Input('interval-component', 'n_intervals')
+    Input('interval-fast', 'n_intervals')  # 使用快速刷新（1秒）
 )
 def update_market_cards(n):
-    """更新市場統計卡片"""
+    """更新市場統計卡片 - 實時價格更新"""
     cards = []
 
     # 取得市場資料
@@ -119,10 +127,10 @@ def update_market_cards(n):
 
 @callback(
     Output('overview-price-chart', 'figure'),
-    Input('interval-component', 'n_intervals')
+    Input('interval-fast', 'n_intervals')  # 使用快速刷新（1秒）
 )
 def update_price_chart(n):
-    """更新價格圖表"""
+    """更新價格圖表 - 實時 K 線更新"""
     fig = make_subplots(
         rows=2, cols=2,
         subplot_titles=('BTC/USDT', 'ETH/USDT', 'ETH/BTC', 'Volume'),
@@ -193,10 +201,10 @@ def update_price_chart(n):
 
 @callback(
     Output('technical-summary', 'children'),
-    Input('interval-component', 'n_intervals')
+    Input('interval-medium', 'n_intervals')  # 使用中速刷新（5秒）
 )
 def update_technical_summary(n):
-    """更新技術指標摘要"""
+    """更新技術指標摘要 - 技術指標與信號"""
     rows = []
 
     markets = [

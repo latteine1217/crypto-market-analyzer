@@ -5,16 +5,11 @@
 
 ## 核心哲學
 
-1. **Good Taste**：
-   追求邏輯簡潔與資料流清晰；不用花俏但難維護的技巧。
-2. **Never Break Userspace**：
-   不破壞既有 API / 資料 schema；改動前先想清楚遷移路徑與相容性。
-3. **Pragmatism**：
-   優先解決「真實交易或研究會遇到的問題」，而非只為指標好看。
-4. **Simplicity**：
-   每個模組只負責一件事；Collector 不做策略，Strategy 不直接碰 DB。
-5. **Observability First**：
-   沒有 log 的功能等於不存在；所有關鍵行為都必須可追蹤可回溯。
+1. **Good Taste**：追求邏輯簡潔與資料流清晰；不用花俏但難維護的技巧。
+2. **Never Break Userspace**：不破壞既有 API / 資料 schema；改動前先想清楚遷移路徑與相容性。
+3. **Pragmatism**：優先解決真實交易/研究問題，而非只為指標好看。
+4. **Simplicity**：每個模組只負責一件事；Collector 不做策略，Strategy 不直接碰 DB。
+5. **Observability First**：沒有 log 的功能等於不存在；所有關鍵行為都必須可追蹤可回溯。
 
 ---
 
@@ -23,484 +18,309 @@
 **專案名稱**: Crypto Market Analyzer
 
 **任務範圍**：
+- 多交易所與鏈上 API 資料（OHLCV / trades / order book / on-chain）
+- 標準化後寫入 TimescaleDB
+- 分析與模型（預測、異常、策略回測、情緒/鏈上輔助）
+- 產出可重現結果與結構化報表
 
-* 從多家交易所（Binance、Coinbase 等）與鏈上 API 取得：
-
-  * 價格數據：OHLCV（多 timeframe）
-  * 交易流水（trades）
-  * 訂單簿快照 / 更新（order book）
-  * 鏈上大額轉帳 / 合約事件
-* 將所有資料標準化、寫入 TimescaleDB 為核心時序資料庫。
-* 基於歷史資料與即時資料，執行：
-
-  * 價格趨勢預測（Forecasting）
-  * 異常偵測（Flash crash / Pump & Dump）
-  * 策略回測（技術指標 + ML Signal）
-  * 市場情緒 / 鏈上行為輔助分析
-* 產出：
-
-  * 可重現的實驗結果
-  * 結構化報表（HTML / PDF）
-  * 對之後接「實盤交易層」具備擴充彈性。
-
-**驗收指標**（可調整，但必須明確寫下來）：
-
-* 資料品質：
-
-  * K 線缺失率（per symbol / timeframe） ≤ 0.1%
-  * 訂單簿快照 / trades 時間序列單調不倒退
-* 分析穩定性：
-
-  * 回測引擎在同一資料集上「同一策略」結果完全可重現
-  * 策略績效所有指標皆可程式化再現
-* 系統可用性：
-
-  * Collector 崩潰可自動重啟
-  * 任何 Agent 錯誤皆有明確 log 與錯誤碼
+**驗收指標**：
+- K 線缺失率（per symbol / timeframe） ≤ 0.1%
+- 訂單簿/交易序列時間戳不倒退
+- 同一資料集同一策略回測結果可完全重現
+- Collector 崩潰可自動重啟，錯誤有 log/錯誤碼
+- 監控指標完整導出（Prometheus 格式）
+- 告警規則正常觸發（資料缺失、錯誤率、服務異常）
+- 容器重啟後資料完整保留（資料庫、日誌、配置）
+- 報表排程準時執行且結果正確
 
 ---
 
 # 🧠 Agent 角色與規則
 
-## 1. Data Collector Agent（資料抓取 Agent）
+## 1. Data Collector Agent
+- 只負責正確完整抓資料（REST / WS / 補資料）
+- 必須有 timeout / retry / rate limit
+- 缺失區段只排程補資料，不補假資料
+- 任務配置化（`collector.yml`），不寫死
 
-**職責**：
+## 2. Data Quality & Validation Agent
+- 只標記（flag），不刪資料
+- 修正可關閉且有 `cleaning_version`
+- 驗證結果寫回 DB/metadata
 
-* 決定「抓什麼」「從哪裡抓」「什麼頻率抓」：
+## 3. Analysis Agent
+- 任務至少有 baseline 模型
+- 模型/特徵配置放在 `configs/models/*.yml`
+- 輸出包含：預測/分類 + 信心分數 + feature/version + 時間區間
 
-  * 交易所：Binance / Coinbase / …
-  * 資料類型：OHLCV / trades / order book / on-chain
-  * 模式：歷史補資料、定期批次、WebSocket 實時
-* 與排程器（Scheduler）協同，管理抓取任務 Queue。
+## 4. Strategy & Backtest Agent
+- 僅使用清洗後資料
+- 嚴格避免未來資訊
+- 一致績效指標（年化報酬、Sharpe、Max DD、勝率、交易次數）
+- 結果可重現（seed + `results/<exp_id>/meta.json`）
 
-**規則**：
-
-1. 不直接做策略計算，只負責「**正確完整地拿到資料**」。
-2. 所有請求必須有：
-
-   * 超時設定
-   * 重試機制
-   * 速率限制（respect exchange rate limit）
-3. 對於缺失區段，只做「補資料任務排程」，不自行填補虛假數據。
-4. Collector Agent 決策皆配置化（`collector.yml`），不寫死在程式碼。
-
----
-
-## 2. Data Quality & Validation Agent（資料品質與驗證 Agent）
-
-**職責**：
-
-* 驗證資料是否可被下游模型使用。
-* 做：
-
-  * 時間序列連續性檢查
-  * 價格跳點 / 交易量異常標記
-  * 訂單簿深度合理性檢查
-
-**規則**：
-
-1. 只標記（flag），不隨意刪除資料。
-2. 任何資料修正（平滑、去噪）都必須：
-
-   * 可關閉
-   * 有版本標記（`cleaning_version`）
-3. 驗證結果要寫回 DB 或 metadata 表，而不是只印在 log。
+## 5. Report Agent
+- Overview / Detail 分層
+- 圖表資料可從 DB 或 `results/` 還原
+- 標示資料期間、交易所、模型/策略版本
 
 ---
 
-## 3. Analysis Agent（分析與模型 Agent）
+# ✅ 已實現功能（重點整理）
 
-**職責**：
+## 資料抓取與診斷
+- REST API Collectors：Binance / Bybit / OKX
+- WebSocket 實時收集：trades / order book
+- 自動補資料：缺失檢測 + 優先級 + 退避重試
+- 錯誤處理與日誌分類（network / rate_limit / timeout）
 
-* 選擇與管理：
+## 資料品質與驗證
+- 時序連續性、價格跳點、成交量異常檢查
+- 品質評分（0-100）
+- 異常觸發補資料任務
+- 追蹤表：`data_quality_summary`, `backfill_tasks`, `api_error_logs`
 
-  * 特徵工程 pipeline
-  * 模型家族（統計模型 / ML / DL）
-  * 評估流程與指標
-* 為不同任務建立標準 pipeline：
+## 分析與模型
+- 80+ 特徵（價格/成交量/技術指標/波動度）
+- Feature selection pipeline
+- Baseline / ML / DL 模型
+- 異常偵測（Isolation Forest + Statistical）
 
-  * 價格預測：regression / sequence model
-  * 異常偵測：z-score / Isolation Forest / autoencoder
-  * Sentiment / On-chain feature：特徵融合
+## 策略與回測
+- 統一策略介面與訊號型別
+- RSI / MACD / Fractal 等策略
+- 回測引擎（滑價、手續費、投組、交易規則）
+- 績效指標完整且可重現
 
-**規則**：
+## 報表
+- HTML / PDF 報表 + 郵件發送
+- Dashboard 視覺化介面
+- 報表紀錄表：`report_generation_logs`, `email_send_logs`
 
-1. 每個任務至少要有「baseline 模型」（如：MA、ARIMA、logistic），禁止只有複雜 DL。
-2. 模型與特徵配置放在 `configs/models/*.yml`，不可硬寫在程式碼。
-3. 模型輸出必須包含：
+## 部署與監控
+- `docker-compose.yml`：13 服務完整編排（db/redis/collector/ws/analyzer/report-scheduler/monitoring/jupyter）
+- Prometheus + Grafana + Alertmanager 已驗證運行
+- 3 核心告警規則（K線缺失/資料缺失率/錯誤率）
+- Report 排程器：每日 08:00、每週一 09:00 自動產出
+- Metrics 導出系統（Prometheus 格式）
+- 長期穩定性測試工具（24h 監控腳本）
+- 自動測試報告生成
+- 資料持久化驗證通過（Docker volumes）
+- 自動重啟機制（restart: unless-stopped）
 
-   * 預測值 / 分類結果
-   * 不確定性或信心分數（若適用）
-   * 使用的特徵版本與資料時間區間。
+## 資料庫連接管理
+- **連接池機制**：psycopg2 ThreadedConnectionPool（min=2, max=10）
+- **自動健康檢查**：連接超時（10s）+ 事務超時（30s）
+- **殭屍連接監控**：自動檢測與清理 `idle in transaction (aborted)` 狀態
+- **定時清理任務**：每 15 分鐘執行一次監控與清理
+- **連接池指標**：Prometheus metrics 即時追蹤使用率與連接狀態
+  - `collector_db_pool_connections{state}`: 連接數（active/idle/idle_in_transaction）
+  - `collector_db_pool_usage_rate`: 使用率百分比（0-100）
+  - `collector_db_pool_total_connections`: 總連接數
 
----
-
-## 4. Strategy & Backtest Agent（策略與回測 Agent）
-
-**職責**：
-
-* 定義策略 DSL / 介面：
-
-  * 技術指標型（MA cross / RSI / Bollinger 等）
-  * ML signal 型（model output → entry/exit）
-* 實作統一回測框架（Backtesting Engine）：
-
-  * 滑價（slippage）
-  * 手續費
-  * 交易規則限制（最小單位、最小 notional 等）
-
-**規則**：
-
-1. 策略只看「經過清洗與標準化的資料」，不得直接調用原始 tick。
-2. 回測環境必須嚴格避免「未來資訊」：
-
-   * 不允許使用 t+1 的資料決定 t 時點的交易決策。
-3. 必須有一致的績效指標：
-
-   * 年化報酬、Sharpe、Max Drawdown、勝率、交易次數
-4. 所有策略結果都需可重現：
-
-   * seed 固定
-   * 版本與配置寫入 `results/<exp_id>/meta.json`
-
----
-
-## 5. Report Agent（報表 Agent）
-
-**職責**：
-
-* 整合：
-
-  * 資料品質摘要
-  * 模型結果
-  * 策略回測績效
-* 產出：
-
-  * HTML / PDF 報告
-  * 圖表（K 線 + 訊號 + Equity Curve）
-  * 檔案與 Dashboard 介面（未來）
-
-**規則**：
-
-1. 報告必須分層呈現：
-
-   * Overview（給非技術人）
-   * Detail（給 quant / engineer）
-2. 所有圖表背後資料皆可從 DB 或 `results/` 還原。
-3. 明確標示：
-
-   * 資料期間
-   * 交易所與幣種
-   * 模型 / 策略版本與日期
+## 鏈上與鯨魚追蹤
+- Ethereum / Bitcoin / BSC / Tron whale tracker connectors
+- Whale tracking schema 與 migration
+- Chain data 收集設定與指引文件
 
 ---
 
-# 🔄 工程工作流程 (Engineering Workflow)
+# 📌 重要文件
 
-## 階段 0：任務接收與需求釐清
+## 資料收集
+- Collector 連接器：`collector-py/src/connectors/{binance,bybit,okx}_rest.py`
+- WS Collector：`data-collector/src/binance_ws/BinanceWSClient.ts`
+- 補資料排程：`collector-py/src/schedulers/backfill_scheduler.py`
+- 資料品質：`collector-py/src/quality_checker.py`
+- 資料驗證器：`collector-py/src/validators/data_validator.py`
 
-```text
-使用者需求 → 明確化 (資料範圍 / 頻率 / 分析目標) 
-           → 確認可行性 (API 限制 / 資料量 / 算力)
-           → 拆解成子任務 (Collector / Analyzer / Strategy / Report)
+## 分析與模型
+- 特徵工程：`data-analyzer/src/features/`
+- Feature selection：`data-analyzer/src/feature_selection/selection_pipeline.py`
+- 模型註冊：`data-analyzer/src/models/model_registry.py`
+- 策略/回測：`data-analyzer/src/strategies/`、`data-analyzer/src/backtesting/`
+
+## 報表與視覺化
+- 報表系統：`data-analyzer/src/reports/`
+- Dashboard：`dashboard/static/reports_dashboard.html`、`dashboard/app.py`
+- 報表說明：`data-analyzer/REPORT_USAGE.md`
+
+## 資料庫
+- DB schemas：`database/schemas/`
+- DB migration：`database/migrations/`
+- Whale tracking schema：`database/schemas/02_blockchain_whale_tracking.sql`
+
+## 監控與測試
+- Metrics 導出：`data-collector/src/metrics/MetricsServer.ts`、`collector-py/src/metrics_exporter.py`
+- Prometheus 配置：`monitoring/prometheus/prometheus.yml`
+- 告警規則：`monitoring/prometheus/rules/alerts.yml`
+- Alertmanager：`monitoring/alertmanager/alertmanager.yml`
+- Grafana dashboards：`monitoring/grafana/dashboards/long_run_test.json`
+- 長期測試監控：`scripts/long_run_monitor.py`、`scripts/start_long_run_test.sh`、`scripts/stop_long_run_test.sh`
+- 測試報告生成：`scripts/generate_test_report.py`
+- 告警 webhook：`scripts/alert_webhook.py`
+- **資料庫連接監控**：`scripts/monitor_db_connections.py` - 殭屍連接檢測與自動清理
+
+## 排程與自動化
+- Report scheduler：`scripts/report_scheduler.py`
+- 日報生成：`scripts/generate_daily_report.py`
+- 週報生成：`scripts/generate_weekly_report.py`
+
+## 部署與配置
+- Docker Compose：`docker-compose.yml`
+- Env templates：`.env.example`、`collector-py/.env.example`、`data-collector/.env.example`
+- Whale tracker 配置：`configs/whale_tracker.yml`
+
+## 文檔
+- 鏈上資料收集指南：`docs/BLOCKCHAIN_DATA_COLLECTION_GUIDE.md`
+- Email 設定指南：`docs/EMAIL_SETUP_GUIDE.md`
+- Grafana Dashboards 指南：`docs/GRAFANA_DASHBOARDS_GUIDE.md`
+- 長期測試指南：`docs/LONG_RUN_TEST_GUIDE.md`
+- 專案狀態報告：`docs/PROJECT_STATUS_REPORT.md`
+- 穩定性驗證報告：`docs/STABILITY_VERIFICATION_REPORT.md`
+
+---
+
+# 📊 系統當前狀態
+
+**最後驗證時間**: 2025-12-29 15:25
+**測試版本**: v1.3.0
+
+## 服務運行狀態（13/13 服務運行中）
+- ✅ **TimescaleDB**: 運行正常（235 MB 資料，19 張表）
+- ✅ **Redis**: 運行正常（1.42M memory, 14.8k commands）
+- ✅ **Collector (Python)**: 運行正常（連接池 + 監控，Metrics port 8000）
+- ✅ **WS Collector (TypeScript)**: 運行正常（Metrics port 8001）
+- ✅ **Whale Tracker**: 運行正常（10 分鐘間隔）
+- ✅ **Prometheus**: 運行正常（30d retention）
+- ✅ **Grafana**: 運行正常（Port 3000）
+- ✅ **Alertmanager**: 運行正常（SMTP configured）
+- ✅ **Postgres Exporter**: 運行正常
+- ✅ **Redis Exporter**: 運行正常
+- ⚠️ **Node Exporter**: macOS Docker 限制（生產環境可用）
+- ✅ **Report Scheduler**: 運行正常（Daily 08:00, Weekly Mon 09:00）
+- ✅ **Jupyter Lab**: 運行正常（Port 8888）
+- ⏸️ **Analyzer**: 批次任務（手動/排程執行）
+
+## 資料庫連接池狀態
+- **連接池配置**: min=2, max=10
+- **當前連接數**: 8 (1 active, 7 idle)
+- **使用率**: 80.0%
+- **殭屍連接**: 0（自動監控與清理每 15 分鐘執行）
+- **事務回滾率**: 0.14%（正常範圍）
+
+## 穩定性測試結果
+
+### 當前測試（進行中）
+- **測試 ID**: stability_24h_20251229_final
+- **開始時間**: 2025-12-29 15:25:41 CST
+- **預計結束**: 2025-12-30 15:25:41 CST
+- **監控頻率**: 每 5 分鐘
+- **監控進程**: PID 49351（正常運行）
+
+### 先前測試結果（已修復問題）
+- **測試時長**: 12.08 小時（發現並修復資料庫連接問題）
+- **容器重啟**: 1 次（測試期間）
+- **發現問題**:
+  - ✅ 已修復：資料庫殭屍連接（idle in transaction aborted）
+  - ✅ 已修復：167 個 "connection already closed" 錯誤
+- **實施改進**:
+  - ✅ 升級到連接池機制（ThreadedConnectionPool）
+  - ✅ 添加自動健康檢查與重連
+  - ✅ 添加殭屍連接監控與自動清理
+  - ✅ 添加連接池使用率 Prometheus 指標
+- **CPU 使用率**: 平均 13.6%（4.0%-61.3%）
+- **記憶體使用率**: 平均 78.5%（75.3%-83.4%）
+- **磁碟使用率**: 平均 13.0%（12.8%-14.3%）
+- **資料持久化**: ✅ 通過（重啟後完整保留）
+
+## 資料收集統計
+- **支援交易所**: Binance, Bybit, OKX（REST + WebSocket）
+- **支援鏈上**: Ethereum, Bitcoin, BSC, Tron（Whale tracking）
+- **資料類型**: OHLCV, Trades, Order Book, On-chain transfers
+- **資料庫大小**: 235 MB（TimescaleDB）
+- **日誌累積**: ~9.2 MB
+
+---
+
+# ⚠️ 已知問題
+
+## 穩定性問題
+1. **WebSocket 定期重連**
+   - 現象：WebSocket 連接每數小時會自動重連（正常行為）
+   - 影響：重連期間可能短暫遺失 1-2 秒資料（通過補資料機制修復）
+   - 位置：`data-collector/src/binance_ws/BinanceWSClient.ts`
+   - 優先級：低（已有補資料機制保障完整性）
+
+2. **Node Exporter 無法在 macOS Docker 運行**
+   - 現象：需掛載主機根目錄 `/`，macOS Docker Desktop 限制
+   - 影響：缺少主機系統層級監控指標
+   - 解決方案：生產環境 Linux 部署時可正常運行
+   - 優先級：低（開發環境限制）
+
+## 資源使用問題
+3. **記憶體使用率偏高**
+   - 現象：平均 78.5%（測試期間 75.3%-83.4%）
+   - 影響：長時間運行後可能需要優化
+   - 優先級：低（正常運行範圍）
+
+## 待驗證項目
+4. **完整 24 小時穩定性測試**
+   - 現況：正在執行（2025-12-29 15:25 開始）
+   - 預計完成：2025-12-30 15:25
+   - 優先級：高
+
+## 已修復問題 ✅
+- ✅ **資料庫殭屍連接**（2025-12-29 修復）
+  - 問題：idle in transaction (aborted) 狀態連接累積
+  - 解決：實施連接池 + 自動監控清理（每 15 分鐘）
+- ✅ **資料庫連接錯誤**（2025-12-29 修復）
+  - 問題：167 個 "connection already closed" 錯誤
+  - 解決：連接健康檢查 + 自動重連機制
+
+---
+
+# 📋 Phase TODO（尚未實現功能）
+
+## 實驗管理與模型穩固
+- [ ] MLflow 安裝與整合（SQLite backend + `mlruns/`）
+- [ ] 記錄模型參數/指標/feature 版本/時間區間/Git hash
+- [ ] 穩定 XGBoost 與 LSTM baseline（消除警告、確保可重現）
+- [ ] Feature pipeline 完整文檔化
+
+## 資料源擴展
+- [ ] Coinbase REST API connector（統一 schema / error handling / rate limit）
+- [ ] Ethereum 大額轉帳指標（Etherscan API v2 整合）
+- [ ] On-chain 特徵整合到 analysis pipeline（目前僅收集未分析）
+- [ ] 更多鏈上指標（Gas price, Active addresses, DEX volume）
+
+## Paper Trading（研究性質）
+- [ ] 準實時模式回測改造（模擬實盤延遲與滑點）
+- [ ] 虛擬交易記錄表設計與實現
+- [ ] PnL 追蹤與績效統計
+- [ ] 風控規則實現（單筆 2%、每日 5%、倉位 20%）
+- [ ] 訂單模擬器（市價/限價/止損）
+
+## 性能與穩定性優化（按需）
+- [ ] Python/TypeScript 程式碼 profiling
+- [ ] TimescaleDB 自動壓縮策略（chunk_time_interval 調整）
+- [ ] TimescaleDB 資料保留政策（自動刪除舊資料）
+- [ ] Dashboard 熱路徑快取策略（Redis/內存）
+- [ ] Database query 優化（索引、查詢計劃分析）
+- [ ] WebSocket 重連機制優化（減少重連頻率）
+
+## 生產環境部署
+- [ ] Linux 生產環境部署測試
+- [ ] SSL/TLS 憑證配置（Grafana/API endpoints）
+- [ ] 備份與災難恢復策略
+- [ ] 多節點部署方案（如需要）
+
+---
+
+# 🧬 系統資料流（簡版）
+
 ```
-
-**原則**：
-先寫下「實驗 / 系統目標」與「驗收標準」，再寫任何一行程式。
-
----
-
-## 階段 1：資料抓取與診斷
-
-### 1.1 Collector SOP
-
-```bash
-① 先從單一交易所 + 單一 symbol + 單一 timeframe 開始 (ex: BTCUSDT, 1m)
-② 呼叫 REST API 抓歷史 OHLCV，寫入 TimescaleDB
-③ 定義 K 線主鍵: (market_id, timeframe, open_time)
-④ 設計補資料邏輯: 檢查時間 gap → 產生補抓任務
-⑤ 加入 basic logging: request_time, status, rows_inserted
-```
-
-### 1.2 WebSocket / 實時數據（第二階段）
-
-```bash
-① 以 Node.js / ws 連接 Binance stream
-② 接收 trades / order book incremental updates
-③ 寫入 Redis / Kafka 作為暫存
-④ 由後端 Service 批次 flush 至 TimescaleDB
-```
-
----
-
-## 階段 2：資料驗證與品質控管
-
-```bash
-① 定期跑 data_quality_job:
-   - 檢查各 symbol / timeframe 的 missing ratio
-   - 檢查是否存在 out-of-order timestamp
-   - 檢查價格是否出現極端跳點 (jump > Nσ)
-
-② 將檢查結果寫入:
-   - data_quality_summary table
-   - 每個異常段落打上 tag (ex: 'gap', 'jump', 'suspect_liquidity')
-
-③ 儀表板 / 報表需顯示資料品質摘要
-```
-
----
-
-## 階段 3：分析與模型設計
-
-```bash
-① 在 data-analyzer 中實作 EDA Notebook:
-   - 價格分布 / 報酬分布
-   - 波動度、成交量
-   - 技術指標 (MA / RSI / MACD 等)
-
-② 建立 features pipeline:
-   - features/price_features.py
-   - features/volume_features.py
-   - features/onchain_features.py
-
-③ 建立 models baseline:
-   - models/baseline/ma_forecast.py
-   - models/ml/lstm_forecast.py
-   - models/anomaly/isolation_forest.py
-
-④ 評估並紀錄:
-   - 交叉驗證結果
-   - 每個模型的優缺點與適用場景
-```
-
----
-
-## 階段 4：策略設計與回測
-
-```bash
-① 定義統一策略介面: StrategyBase
-② 實作:
-   - strategies/ma_cross.py
-   - strategies/rsi_reversal.py
-   - strategies/model_signal.py
-
-③ Backtest:
-   - backtesting/engine.py:
-     - feed: cleaned OHLCV + features
-     - apply: Strategy
-     - simulate: 交易成本 + 滑價
-
-④ 評估績效指標並輸出:
-   - results/<exp_id>/metrics.json
-   - results/<exp_id>/equity_curve.csv
-   - results/<exp_id>/charts/*.png
-```
-
----
-
-## 階段 5：報表生成與交付
-
-```bash
-① Report Agent 讀取:
-   - data_quality_summary
-   - model performance
-   - backtest results
-
-② 產出:
-   - HTML 報表 (適合瀏覽器 / Dashboard)
-   - PDF 報表 (適合寄送 / 存檔)
-
-③ 定期排程:
-   - 每日 / 每週 / 每月報告 (以 cron / scheduler 管理)
-```
-
----
-
-# 💻 寫程式哲學 (Programming Philosophy)
-
-## 1. 架構與模組化
-
-* Collector 與 Analyzer 嚴格分離：
-
-  * Collector 不做特徵與模型。
-  * Analyzer 不直接打交易所 API。
-* 每一層只依賴「下一層的穩定介面」，而不是「直接耦合底層實作」。
-
-## 2. 配置優先（Config-Driven）
-
-* 交易所 / symbol / timeframe / 任務排程全部放在 config：
-
-  * `configs/collector/binance_btcusdt_1m.yml`
-  * `configs/models/lstm_price_forecast.yml`
-* 新增實驗 ≈ 複製一份 config + 修改參數 → 不改動程式碼。
-
-## 3. Idempotent & 可重試
-
-* Collector 任務必須設計成：
-
-  * 重跑不會重複寫入錯誤資料（主鍵 / upsert）。
-  * 截斷範圍必須清楚（ex: open_time [t0, t1)）。
-
-## 4. Logging & Metrics
-
-* 基礎 log：
-
-  * 任務開始 / 結束時間
-  * 抓取的 symbol / timeframe / 筆數
-  * API 狀態碼與錯誤訊息
-* 進階 metrics：
-
-  * 每個 collector job 的成功率
-  * 每個模型 / 策略的最新 performance snapshot
-
-## 5. 測試與安全修改原則（簡化版）
-
-* 小修改：
-
-  * 修改單一 function → 立刻跑對應 unit test。
-* 中型修改：
-
-  * 修改一個 module → 寫 minimal test / E2E script。
-* 大型重構：
-
-  * 先寫設計文件 → 拆成多個小步驟 → 每步都可回滾。
-
----
-
-# 📂 專案木包（Project Structure）
-
-```bash
-crypto-market-analyzer/
-│
-├── collector-py/             # 第一階段：Python Collector (REST 為主)
-│   ├── src/
-│   │   ├── connectors/       # 各交易所 / 數據源連接
-│   │   │   ├── binance_rest.py
-│   │   │   ├── coinbase_rest.py
-│   │   │   └── onchain_api.py
-│   │   ├── loaders/          # 寫入 TimescaleDB / Redis 的邏輯
-│   │   ├── validators/       # 簡單資料驗證（schema / type）
-│   │   ├── schedulers/       # APScheduler / Celery 任務排程
-│   │   └── config.py         # 共用設定載入
-│   └── requirements.txt
-│
-├── data-collector/           # 第二階段：Node.js 實時 Collector (WebSocket)
-│   ├── src/
-│   │   ├── binance_ws.ts
-│   │   ├── coinbase_ws.ts
-│   │   ├── orderbook_handlers/
-│   │   └── queues/           # Redis / Bull 任務佇列
-│   └── package.json
-│
-├── data-analyzer/            # Python：分析 + 模型 + 策略
-│   ├── src/
-│   │   ├── features/
-│   │   ├── models/
-│   │   ├── anomaly/
-│   │   ├── strategies/
-│   │   ├── backtesting/
-│   │   └── reports/
-│   ├── notebooks/            # EDA / Prototype
-│   └── requirements.txt
-│
-├── database/
-│   ├── schemas/              # schema.sql / migration scripts
-│   └── migrations/
-│
-├── configs/
-│   ├── collector/
-│   ├── models/
-│   ├── strategies/
-│   └── system.yml
-│
-├── shared/
-│   ├── config/               # 共用設定解析工具
-│   └── utils/                # 公用工具 (logging, time, etc.)
-│
-├── scripts/                  # 開發與運維腳本
-│   ├── init_db.sh
-│   ├── run_collector.sh
-│   ├── run_backtest.sh
-│   └── verify_*.py
-│
-├── docker-compose.yml
-└── README.md
-```
-
----
-
-# 🧬 主程式架構 (Main Program Architecture)
-
-## 1. 系統資料流概念圖（文字版）
-
-```text
-[Scheduler] 
-    ↓ 觸發 Collector Jobs
-[Data Collector Agent]
-    ↓ 寫入
-[TimescaleDB / Redis]
-    ↓ 抽取 (ETL)
-[Data Quality & Validation Agent]
-    ↓ 清洗 / 標記後資料
-[Analysis Agent]
-    ↓ Signal / Feature
-[Strategy & Backtest Agent]
-    ↓ PnL / Metrics / Equity Curve
-[Report Agent]
-    ↓
-HTML / PDF / Dashboard
-```
-
----
-
-## 2. Python 控制流程（Pseudo Main Loop）
-
-```python
-def main():
-    cfg = load_system_config("configs/system.yml")
-    init_logging(cfg.logging)
-    db = init_database(cfg.database)
-    redis_client = init_redis(cfg.redis)
-
-    scheduler = init_scheduler(cfg.scheduler)
-
-    # 註冊 Collector 任務
-    register_collectors(scheduler, cfg.collector, db, redis_client)
-
-    # 註冊資料品質任務
-    register_quality_jobs(scheduler, cfg.data_quality, db)
-
-    # 註冊分析 / 回測任務
-    register_analysis_jobs(scheduler, cfg.analysis, db)
-    register_backtest_jobs(scheduler, cfg.backtesting, db)
-
-    # 註冊報表任務
-    register_report_jobs(scheduler, cfg.reports, db)
-
-    # 進入排程循環
-    scheduler.start()
-```
-
----
-
-## 3. 分析與回測入口範例
-
-```python
-# data-analyzer/src/cli/run_analysis.py
-def run_price_forecast(config_path: str):
-    cfg = load_model_config(config_path)
-    data = load_market_data(cfg.data)
-    features = build_features(data, cfg.features)
-    model = load_or_train_model(cfg.model, features)
-    predictions = model.predict(features)
-    save_predictions(predictions, cfg.output)
-
-# data-analyzer/src/cli/run_backtest.py
-def run_backtest(config_path: str):
-    cfg = load_strategy_config(config_path)
-    market_data = load_market_data(cfg.data)
-    features = build_features(market_data, cfg.features)
-    strategy = build_strategy(cfg.strategy, features)
-    results = backtest(strategy, market_data, cfg.execution)
-    save_backtest_results(results, cfg.output)
+[Scheduler] → [Collectors] → [TimescaleDB/Redis]
+            → [Data Quality] → [Analysis/Models]
+            → [Strategy/Backtest] → [Report]
 ```

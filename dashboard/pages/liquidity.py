@@ -74,7 +74,7 @@ layout = dbc.Container([
 @callback(
     Output('orderbook-stats', 'children'),
     [Input('liquidity-symbol-selector', 'value'),
-     Input('interval-component', 'n_intervals')]
+     Input('interval-fast', 'n_intervals')]  # 使用快速刷新
 )
 def update_orderbook_stats(symbol, n):
     """更新訂單簿統計"""
@@ -142,7 +142,7 @@ def update_orderbook_stats(symbol, n):
 @callback(
     Output('liquidity-profile', 'figure'),
     [Input('liquidity-symbol-selector', 'value'),
-     Input('interval-component', 'n_intervals')]
+     Input('interval-fast', 'n_intervals')]  # 使用快速刷新
 )
 def update_liquidity_profile(symbol, n):
     """更新流動性剖面圖"""
@@ -237,7 +237,7 @@ def update_liquidity_profile(symbol, n):
 @callback(
     Output('bid-ask-pressure', 'figure'),
     [Input('liquidity-symbol-selector', 'value'),
-     Input('interval-component', 'n_intervals')]
+     Input('interval-fast', 'n_intervals')]  # 使用快速刷新
 )
 def update_bid_ask_pressure(symbol, n):
     """更新買賣壓力圖"""
@@ -304,7 +304,7 @@ def update_bid_ask_pressure(symbol, n):
 @callback(
     Output('spread-analysis', 'children'),
     [Input('liquidity-symbol-selector', 'value'),
-     Input('interval-component', 'n_intervals')]
+     Input('interval-fast', 'n_intervals')]  # 使用快速刷新
 )
 def update_spread_analysis(symbol, n):
     """更新 Spread 分析"""

@@ -17,8 +17,8 @@ torch>=2.1.2
 # tensorflow>=2.15.0
 
 # 技術指標
-ta-lib-bin>=0.4.28  # 或使用 pandas-ta
-pandas-ta>=0.3.14b
+# ta-lib-bin>=0.4.28  # 需要系統依賴，使用 pandas-ta 替代
+pandas-ta>=0.4.67b0  # Python 3.12+ required
 
 # 視覺化
 matplotlib>=3.8.2
@@ -37,6 +37,7 @@ pyyaml>=6.0.1
 # 工具
 loguru>=0.7.2
 tqdm>=4.66.1
+apscheduler>=3.10.4
 
 # 報表生成
-weasyprint>=60.1  # PDF 生成（可選）
+# weasyprint>=60.1  # PDF 生成（可選），需要額外系統依賴，暫時禁用

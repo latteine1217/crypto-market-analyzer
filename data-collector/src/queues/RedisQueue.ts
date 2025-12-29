@@ -99,23 +99,18 @@ export class RedisQueue {
     const messages: QueueMessage[] = [];
 
     try {
-      const pipeline = this.client.pipeline();
+      const multi = this.client.multi();
+      multi.lrange(queueKey, 0, count - 1);
+      multi.ltrim(queueKey, count, -1);
+      const results = await multi.exec();
 
-      // 使用 LPOP 取出多個訊息
-      for (let i = 0; i < count; i++) {
-        pipeline.lpop(queueKey);
-      }
-
-      const results = await pipeline.exec();
-
-      if (results) {
-        for (const [error, result] of results) {
-          if (!error && result) {
-            try {
-              messages.push(JSON.parse(result as string));
-            } catch (parseError) {
-              log.error('Failed to parse queue message', parseError);
-            }
+      const rangeResult = results?.[0]?.[1] as string[] | null;
+      if (rangeResult && rangeResult.length > 0) {
+        for (const result of rangeResult) {
+          try {
+            messages.push(JSON.parse(result));
+          } catch (parseError) {
+            log.error('Failed to parse queue message', parseError);
           }
         }
       }

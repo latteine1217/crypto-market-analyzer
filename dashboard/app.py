@@ -12,6 +12,9 @@ from dash import Dash, html, dcc
 import dash_bootstrap_components as dbc
 from loguru import logger
 
+# 導入所有頁面模組以註冊它們的 callbacks
+from pages import overview, technical, signals, liquidity
+
 # 初始化 Dash 應用
 app = Dash(
     __name__,
@@ -51,10 +54,23 @@ app.layout = dbc.Container([
     dcc.Location(id='url', refresh=False),
     html.Div(id='page-content'),
 
-    # 自動刷新
+    # 多層級自動刷新
+    # 快速刷新：價格、訂單簿（1秒）
     dcc.Interval(
-        id='interval-component',
-        interval=60*1000,  # 每 60 秒更新一次
+        id='interval-fast',
+        interval=1*1000,  # 1 秒更新
+        n_intervals=0
+    ),
+    # 中速刷新：技術指標（5秒）
+    dcc.Interval(
+        id='interval-medium',
+        interval=5*1000,  # 5 秒更新
+        n_intervals=0
+    ),
+    # 慢速刷新：統計資料（30秒）
+    dcc.Interval(
+        id='interval-slow',
+        interval=30*1000,  # 30 秒更新
         n_intervals=0
     )
 ], fluid=True, className="p-4")
@@ -67,20 +83,16 @@ app.layout = dbc.Container([
 def display_page(pathname):
     """路由控制"""
     if pathname == '/technical':
-        from pages import technical
         return technical.layout
     elif pathname == '/signals':
-        from pages import signals
         return signals.layout
     elif pathname == '/liquidity':
-        from pages import liquidity
         return liquidity.layout
     else:
-        from pages import overview
         return overview.layout
 
 
 if __name__ == '__main__':
     logger.info("Starting Crypto Market Analyzer Dashboard...")
     logger.info("Access at: http://localhost:8050")
-    app.run_server(debug=True, host='0.0.0.0', port=8050)
+    app.run(debug=True, host='0.0.0.0', port=8050)

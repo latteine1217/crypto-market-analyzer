@@ -1,0 +1,105 @@
+# Prometheus 告警規則
+# Phase 6.3: 3 個核心告警規則
+
+groups:
+  - name: collector_alerts
+    interval: 60s
+    rules:
+      # Alert 1: 超過 30 分鐘沒有成功抓到任何 K 線
+      - alert: NoKLineDataFor30Minutes
+        expr: |
+          (time() - max(collector_last_success_timestamp_seconds)) > 1800
+        for: 5m
+        labels:
+          severity: critical
+          component: collector
+        annotations:
+          summary: "Collector 超過 30 分鐘未成功收集 K 線數據"
+          description: "Collector 最後一次成功收集時間：{{ $value | humanizeDuration }} 前"
+
+      # Alert 2: 某 symbol 當日缺失率 > 5%
+      - alert: HighDataMissingRate
+        expr: |
+          (collector_missing_data_rate{period="daily"} > 0.05) * 100
+        for: 10m
+        labels:
+          severity: warning
+          component: quality
+        annotations:
+          summary: "{{ $labels.symbol }} 當日資料缺失率過高"
+          description: "{{ $labels.symbol }} 當日缺失率：{{ $value | humanizePercentage }}%（閾值：5%）"
+
+      # Alert 3: Collector 程式異常退出
+      - alert: CollectorProcessDown
+        expr: |
+          up{job="collector"} == 0
+        for: 3m
+        labels:
+          severity: critical
+          component: collector
+        annotations:
+          summary: "Collector 服務停止運行"
+          description: "Collector ({{ $labels.instance }}) 已經停止運行超過 3 分鐘"
+
+  - name: api_alerts
+    interval: 60s
+    rules:
+      # API 錯誤率過高
+      - alert: HighAPIErrorRate
+        expr: |
+          (
+            rate(collector_api_errors_total[1h])
+            /
+            rate(collector_api_requests_total[1h])
+          ) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          component: collector
+        annotations:
+          summary: "API 錯誤率過高"
+          description: "過去 1 小時 API 錯誤率：{{ $value | humanizePercentage }}%（閾值：10%）"
+
+  - name: database_alerts
+    interval: 60s
+    rules:
+      # DB 寫入速率異常低
+      - alert: LowDatabaseWriteRate
+        expr: |
+          (rate(collector_db_writes_total[1h]) < 100)
+          and
+          (rate(collector_db_writes_total[1h]) > 0)
+        for: 15m
+        labels:
+          severity: warning
+          component: database
+        annotations:
+          summary: "資料庫寫入速率異常低"
+          description: "過去 1 小時平均寫入：{{ $value | humanize }} rows/sec（預期：> 100）"
+
+  - name: system_alerts
+    interval: 60s
+    rules:
+      # Redis 連線中斷
+      - alert: RedisDown
+        expr: |
+          up{job="redis"} == 0
+        for: 3m
+        labels:
+          severity: critical
+          component: redis
+        annotations:
+          summary: "Redis 服務停止運行"
+          description: "Redis 已經停止運行超過 3 分鐘"
+
+      # PostgreSQL 連線中斷
+      - alert: PostgreSQLDown
+        expr: |
+          up{job="postgres"} == 0
+        for: 3m
+        labels:
+          severity: critical
+          component: database
+        annotations:
+          summary: "PostgreSQL 服務停止運行"
+          description: "PostgreSQL 已經停止運行超過 3 分鐘"

@@ -18,6 +18,7 @@ export class DBFlusher {
   private queue: RedisQueue;
   private flushing: boolean = false;
   private flushTimer: NodeJS.Timeout | null = null;
+  private marketIdCache: Map<string, number> = new Map();
   private stats = {
     totalFlushed: 0,
     lastFlushTime: 0,
@@ -84,11 +85,18 @@ export class DBFlusher {
     this.flushing = true;
 
     try {
-      // Flush 交易數據
-      await this.flushTrades();
+      let batches = 0;
+      let keepDraining = true;
+      const { batchSize, maxBatchesPerFlush } = this.flushConfig;
 
-      // Flush 訂單簿快照
-      await this.flushOrderBookSnapshots();
+      while (keepDraining && batches < maxBatchesPerFlush) {
+        const tradesFlushed = await this.flushTrades();
+        const orderbooksFlushed = await this.flushOrderBookSnapshots();
+
+        keepDraining =
+          tradesFlushed >= batchSize || orderbooksFlushed >= batchSize;
+        batches += 1;
+      }
 
       this.stats.lastFlushTime = Date.now();
 
@@ -103,14 +111,14 @@ export class DBFlusher {
   /**
    * Flush 交易數據
    */
-  private async flushTrades(): Promise<void> {
+  private async flushTrades(): Promise<number> {
     const messages = await this.queue.pop(
       MessageType.TRADE,
       this.flushConfig.batchSize
     );
 
     if (messages.length === 0) {
-      return;
+      return 0;
     }
 
     log.debug(`Flushing ${messages.length} trades`);
@@ -119,6 +127,11 @@ export class DBFlusher {
 
     try {
       await client.query('BEGIN');
+
+      const rows: Array<[
+        number, string, number, number, number | null, string | null, boolean,
+        number
+      ]> = [];
 
       for (const msg of messages) {
         const trade = msg.data as Trade;
@@ -130,33 +143,45 @@ export class DBFlusher {
           trade.symbol
         );
 
-        // 插入交易記錄
-        await client.query(
-          `
-          INSERT INTO trades (
-            market_id, trade_id, price, quantity, quote_qty,
-            side, is_buyer_maker, timestamp
-          )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8 / 1000.0))
-          ON CONFLICT (market_id, timestamp, trade_id) DO NOTHING
-          `,
-          [
-            marketId,
-            trade.tradeId.toString(),
-            trade.price,
-            trade.quantity,
-            trade.quoteQuantity || null,
-            trade.side || null,
-            trade.isBuyerMaker,
-            trade.timestamp
-          ]
-        );
+        rows.push([
+          marketId,
+          trade.tradeId.toString(),
+          trade.price,
+          trade.quantity,
+          trade.quoteQuantity || null,
+          trade.side || null,
+          trade.isBuyerMaker,
+          trade.timestamp
+        ]);
       }
+
+      const values = rows
+        .map(
+          (_, i) =>
+            `($${i * 8 + 1}, $${i * 8 + 2}, $${i * 8 + 3}, $${i * 8 + 4}, ` +
+            `$${i * 8 + 5}, $${i * 8 + 6}, $${i * 8 + 7}, ` +
+            `to_timestamp($${i * 8 + 8} / 1000.0))`
+        )
+        .join(', ');
+
+      await client.query(
+        `
+        INSERT INTO trades (
+          market_id, trade_id, price, quantity, quote_qty,
+          side, is_buyer_maker, timestamp
+        )
+        VALUES ${values}
+        ON CONFLICT (market_id, timestamp, trade_id) DO NOTHING
+        `,
+        rows.flat()
+      );
 
       await client.query('COMMIT');
 
       this.stats.totalFlushed += messages.length;
       log.info(`Flushed ${messages.length} trades`);
+
+      return messages.length;
 
     } catch (error) {
       await client.query('ROLLBACK');
@@ -174,14 +199,14 @@ export class DBFlusher {
   /**
    * Flush 訂單簿快照
    */
-  private async flushOrderBookSnapshots(): Promise<void> {
+  private async flushOrderBookSnapshots(): Promise<number> {
     const messages = await this.queue.pop(
       MessageType.ORDERBOOK_SNAPSHOT,
       this.flushConfig.batchSize
     );
 
     if (messages.length === 0) {
-      return;
+      return 0;
     }
 
     log.debug(`Flushing ${messages.length} orderbook snapshots`);
@@ -190,6 +215,8 @@ export class DBFlusher {
 
     try {
       await client.query('BEGIN');
+
+      const rows: Array<[number, number, string, string]> = [];
 
       for (const msg of messages) {
         const snapshot = msg.data as OrderBookSnapshot;
@@ -200,29 +227,40 @@ export class DBFlusher {
           snapshot.symbol
         );
 
-        // 插入訂單簿快照
-        await client.query(
-          `
-          INSERT INTO orderbook_snapshots (
-            market_id, timestamp, bids, asks
-          )
-          VALUES ($1, to_timestamp($2 / 1000.0), $3, $4)
-          ON CONFLICT (market_id, timestamp)
-          DO UPDATE SET bids = EXCLUDED.bids, asks = EXCLUDED.asks
-          `,
-          [
-            marketId,
-            snapshot.timestamp,
-            JSON.stringify(snapshot.bids),
-            JSON.stringify(snapshot.asks)
-          ]
-        );
+        rows.push([
+          marketId,
+          snapshot.timestamp,
+          JSON.stringify(snapshot.bids),
+          JSON.stringify(snapshot.asks)
+        ]);
       }
+
+      const values = rows
+        .map(
+          (_, i) =>
+            `($${i * 4 + 1}, to_timestamp($${i * 4 + 2} / 1000.0), ` +
+            `$${i * 4 + 3}, $${i * 4 + 4})`
+        )
+        .join(', ');
+
+      await client.query(
+        `
+        INSERT INTO orderbook_snapshots (
+          market_id, timestamp, bids, asks
+        )
+        VALUES ${values}
+        ON CONFLICT (market_id, timestamp)
+        DO UPDATE SET bids = EXCLUDED.bids, asks = EXCLUDED.asks
+        `,
+        rows.flat()
+      );
 
       await client.query('COMMIT');
 
       this.stats.totalFlushed += messages.length;
       log.info(`Flushed ${messages.length} orderbook snapshots`);
+
+      return messages.length;
 
     } catch (error) {
       await client.query('ROLLBACK');
@@ -244,6 +282,12 @@ export class DBFlusher {
     exchangeName: string,
     symbol: string
   ): Promise<number> {
+    const cacheKey = `${exchangeName}:${symbol}`;
+    const cached = this.marketIdCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
     // 取得 exchange_id
     let result = await client.query(
       'SELECT id FROM exchanges WHERE name = $1',
@@ -276,7 +320,9 @@ export class DBFlusher {
       [exchangeId, symbol, base || symbol.slice(0, -4), quote || 'USDT']
     );
 
-    return result.rows[0].id;
+    const marketId = result.rows[0].id;
+    this.marketIdCache.set(cacheKey, marketId);
+    return marketId;
   }
 
   /**

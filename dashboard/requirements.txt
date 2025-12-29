@@ -15,3 +15,6 @@ plotly>=5.18.0
 # 工具
 python-dotenv>=1.0.0
 loguru>=0.7.2
+
+# 快取
+redis>=5.0.1

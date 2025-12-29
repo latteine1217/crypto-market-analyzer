@@ -29,7 +29,8 @@ export const config = {
   flush: {
     batchSize: parseInt(process.env.FLUSH_BATCH_SIZE || '100'),
     intervalMs: parseInt(process.env.FLUSH_INTERVAL_MS || '5000'),
-    maxRetries: parseInt(process.env.FLUSH_MAX_RETRIES || '3')
+    maxRetries: parseInt(process.env.FLUSH_MAX_RETRIES || '3'),
+    maxBatchesPerFlush: parseInt(process.env.FLUSH_MAX_BATCHES || '3')
   } as FlushConfig,
 
   // WebSocket 配置

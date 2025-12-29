@@ -1,0 +1,164 @@
+# ==============================================================================
+# 區塊鏈巨鯨追蹤配置
+# ==============================================================================
+
+# API Keys（使用環境變數或直接填入）
+api_keys:
+  etherscan: "${ETHERSCAN_API_KEY:-YourEtherscanAPIKey}"
+  bscscan: "${BSCSCAN_API_KEY:-YourBscScanAPIKey}"
+  tronscan: "${TRONSCAN_API_KEY:-YourTronScanAPIKey}"
+  # blockchain.com Bitcoin API 通常不需要 key，使用公開 API
+
+# 大額交易門檻（中等型）
+thresholds:
+  BTC:
+    amount: 50            # >= 50 BTC
+    usd_value: 2000000    # >= 2M USD（備用）
+
+  ETH:
+    amount: 500           # >= 500 ETH
+    usd_value: 1000000    # >= 1M USD（備用）
+
+  USDT:
+    amount: 500000        # >= 500K USDT
+    usd_value: 500000
+
+  USDC:
+    amount: 500000        # >= 500K USDC
+    usd_value: 500000
+
+  BNB:
+    amount: 1000          # >= 1000 BNB
+    usd_value: 300000
+
+  TRX:
+    amount: 5000000       # >= 5M TRX
+    usd_value: 500000
+
+# 異常交易門檻（超大額）
+anomaly_thresholds:
+  BTC:
+    amount: 1000          # >= 1000 BTC
+    usd_value: 40000000
+
+  ETH:
+    amount: 10000         # >= 10000 ETH
+    usd_value: 20000000
+
+  USDT:
+    amount: 10000000      # >= 10M USDT
+    usd_value: 10000000
+
+# API 端點配置
+endpoints:
+  # Ethereum (Etherscan)
+  ethereum:
+    api_url: "https://api.etherscan.io/api"
+    ws_url: "wss://mainnet.infura.io/ws/v3/${INFURA_PROJECT_ID}"  # 若需要 WebSocket
+    rate_limit: 5         # 請求/秒
+    timeout: 30           # 秒
+
+  # Binance Smart Chain
+  bsc:
+    api_url: "https://api.bscscan.com/api"
+    rate_limit: 5
+    timeout: 30
+
+  # Tron
+  tron:
+    api_url: "https://apilist.tronscan.org/api"
+    grid_url: "https://api.trongrid.io"
+    rate_limit: 10
+    timeout: 30
+
+  # Bitcoin
+  bitcoin:
+    api_url: "https://blockchain.info"
+    blockchair_url: "https://api.blockchair.com/bitcoin"
+    rate_limit: 1         # blockchain.info 限制較嚴格
+    timeout: 30
+
+# 資料收集配置
+collection:
+  # 歷史回補
+  historical:
+    enabled: true
+    days_back: 7          # 回補最近 7 天
+    batch_size: 100       # 每批處理交易數
+
+  # 即時監控
+  realtime:
+    enabled: true
+    poll_interval: 60     # 輪詢間隔（秒）
+    max_retries: 3        # 失敗重試次數
+
+  # 排程配置
+  schedule:
+    # 定期全量掃描（補漏）
+    full_scan_interval: "0 */6 * * *"  # 每 6 小時
+    # 輕量級輪詢（新交易）
+    light_poll_interval: "*/5 * * * *"  # 每 5 分鐘
+
+# 資料庫配置
+database:
+  host: "${POSTGRES_HOST:-localhost}"
+  port: 5432
+  user: "${POSTGRES_USER:-crypto}"
+  password: "${POSTGRES_PASSWORD:-crypto_pass}"
+  database: "${POSTGRES_DB:-crypto_db}"
+  pool_size: 10
+
+# 日誌配置
+logging:
+  level: "INFO"
+  format: "[{time:YYYY-MM-DD HH:mm:ss}] {level} | {name}:{function}:{line} - {message}"
+  rotation: "500 MB"
+  retention: "30 days"
+  path: "logs/whale_tracker_{time}.log"
+
+# 告警配置
+alerts:
+  enabled: true
+
+  # Webhook 通知（可選）
+  webhook_url: "${WEBHOOK_URL:-}"
+
+  # 異常交易即時通知
+  anomaly_alert:
+    enabled: true
+    channels: ["log", "webhook"]  # 可選: log, webhook, email
+
+  # 交易所大額流入/流出
+  exchange_flow_alert:
+    enabled: true
+    min_usd_value: 5000000  # 超過 5M USD 通知
+    channels: ["log"]
+
+# 交易所地址來源（自動更新）
+exchange_address_sources:
+  - name: "Etherscan Labels"
+    url: "https://etherscan.io/labelcloud"
+    update_interval: "0 0 * * 0"  # 每週日更新
+
+  - name: "Community Maintained List"
+    url: "https://github.com/ethereum-lists/contracts"
+    update_interval: "0 0 * * 0"
+
+# 效能優化
+performance:
+  # 快取配置
+  cache:
+    enabled: true
+    ttl: 300              # 快取 5 分鐘
+    max_size: 10000       # 最多快取 10000 個條目
+
+  # 批次處理
+  batch_processing:
+    enabled: true
+    batch_size: 100
+    flush_interval: 10    # 秒
+
+  # 並發控制
+  concurrency:
+    max_workers: 4        # 最大併發 worker 數
+    queue_size: 1000      # 任務佇列大小

@@ -116,6 +116,7 @@ export interface FlushConfig {
   batchSize: number;
   intervalMs: number;
   maxRetries: number;
+  maxBatchesPerFlush: number;
 }
 
 // 資料庫連接配置

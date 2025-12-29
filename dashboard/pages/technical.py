@@ -74,7 +74,7 @@ layout = dbc.Container([
 @callback(
     Output('candlestick-chart', 'figure'),
     [Input('symbol-selector', 'value'),
-     Input('interval-component', 'n_intervals')]
+     Input('interval-fast', 'n_intervals')]  # 使用快速刷新
 )
 def update_candlestick(symbol, n):
     """更新 K 線圖"""
@@ -103,32 +103,25 @@ def update_candlestick(symbol, n):
     ))
 
     # 移動平均線
-    if 'ma_20' in df.columns:
+    if 'sma_20' in df.columns:
         fig.add_trace(go.Scatter(
             x=df['timestamp'],
-            y=df['ma_20'],
+            y=df['sma_20'],
             mode='lines',
             name='MA 20',
             line=dict(color='#2196F3', width=1)
         ))
 
-    if 'ma_60' in df.columns:
+    if 'sma_50' in df.columns:
         fig.add_trace(go.Scatter(
             x=df['timestamp'],
-            y=df['ma_60'],
+            y=df['sma_50'],
             mode='lines',
-            name='MA 60',
+            name='MA 50',
             line=dict(color='#FF9800', width=1)
         ))
 
-    if 'ma_200' in df.columns:
-        fig.add_trace(go.Scatter(
-            x=df['timestamp'],
-            y=df['ma_200'],
-            mode='lines',
-            name='MA 200',
-            line=dict(color='#F44336', width=1)
-        ))
+    # 注意：calculate_all() 預設不包含 sma_200，若需要請調整參數
 
     # 威廉分形標記
     if 'fractal_up' in df.columns:
@@ -196,7 +189,7 @@ def update_candlestick(symbol, n):
 @callback(
     Output('macd-chart', 'figure'),
     [Input('symbol-selector', 'value'),
-     Input('interval-component', 'n_intervals')]
+     Input('interval-medium', 'n_intervals')]  # 使用中速刷新
 )
 def update_macd(symbol, n):
     """更新 MACD 圖表"""
@@ -234,10 +227,10 @@ def update_macd(symbol, n):
     ), row=1, col=1)
 
     # 柱狀圖
-    colors = ['#26a69a' if x >= 0 else '#ef5350' for x in df['macd_histogram']]
+    colors = ['#26a69a' if x >= 0 else '#ef5350' for x in df['macd_hist']]
     fig.add_trace(go.Bar(
         x=df['timestamp'],
-        y=df['macd_histogram'],
+        y=df['macd_hist'],
         name='Histogram',
         marker_color=colors
     ), row=2, col=1)
@@ -268,7 +261,7 @@ def update_macd(symbol, n):
 @callback(
     Output('indicator-stats', 'children'),
     [Input('symbol-selector', 'value'),
-     Input('interval-component', 'n_intervals')]
+     Input('interval-medium', 'n_intervals')]  # 使用中速刷新
 )
 def update_indicator_stats(symbol, n):
     """更新技術指標統計"""

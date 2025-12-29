@@ -336,3 +336,143 @@ class DataValidator:
             'errors': errors,
             'warnings': warnings
         }
+
+    def validate_ohlcv_stream(
+        self,
+        ohlcv_rows,
+        timeframe: str,
+        volume_window_size: int = 20,
+        check_missing_intervals: bool = True
+    ) -> Dict:
+        """
+        以串流方式驗證 OHLCV 資料，降低記憶體使用
+
+        Args:
+            ohlcv_rows: iterator yielding [timestamp_ms, open, high, low, close, volume]
+            timeframe: 時間週期（用於推斷間隔）
+            volume_window_size: 成交量異常檢查視窗大小
+            check_missing_intervals: 是否在串流中檢查缺失區間
+
+        Returns:
+            驗證結果摘要
+        """
+        expected_interval = None
+        if check_missing_intervals:
+            interval_map = {
+                '1m': timedelta(minutes=1),
+                '5m': timedelta(minutes=5),
+                '15m': timedelta(minutes=15),
+                '1h': timedelta(hours=1),
+                '4h': timedelta(hours=4),
+                '1d': timedelta(days=1)
+            }
+            expected_interval = interval_map.get(timeframe, timedelta(minutes=1))
+
+        total_records = 0
+        out_of_order = []
+        price_jumps = []
+        volume_spikes = []
+        gaps = []
+
+        prev_timestamp = None
+        prev_close = None
+
+        from collections import deque
+        volume_window = deque(maxlen=volume_window_size)
+        volume_sum = 0.0
+
+        for row in ohlcv_rows:
+            total_records += 1
+            timestamp = datetime.fromtimestamp(row[0] / 1000)
+            close = row[4]
+            volume = row[5]
+
+            if prev_timestamp is not None:
+                if timestamp <= prev_timestamp:
+                    out_of_order.append(total_records - 1)
+
+                if check_missing_intervals and expected_interval is not None:
+                    actual_interval = timestamp - prev_timestamp
+                    if actual_interval > expected_interval * 1.5:
+                        missing_count = int(
+                            actual_interval.total_seconds() /
+                            expected_interval.total_seconds()
+                        ) - 1
+                        gaps.append({
+                            'start_time': prev_timestamp,
+                            'end_time': timestamp,
+                            'missing_count': missing_count,
+                            'actual_interval': actual_interval
+                        })
+
+            if prev_close is not None and prev_close != 0:
+                change_pct = abs(close - prev_close) / prev_close
+                if change_pct > self.price_jump_threshold:
+                    price_jumps.append({
+                        'index': total_records - 1,
+                        'timestamp': timestamp,
+                        'price': close,
+                        'prev_price': prev_close,
+                        'change_pct': change_pct
+                    })
+
+            if len(volume_window) == volume_window_size:
+                avg_volume = volume_sum / volume_window_size
+                if avg_volume != 0:
+                    spike_ratio = volume / avg_volume
+                    if spike_ratio > self.volume_spike_threshold:
+                        volume_spikes.append({
+                            'index': total_records - 1,
+                            'volume': volume,
+                            'avg_volume': avg_volume,
+                            'spike_ratio': spike_ratio
+                        })
+
+            if len(volume_window) == volume_window_size:
+                volume_sum -= volume_window[0]
+            volume_window.append(volume)
+            volume_sum += volume
+
+            prev_timestamp = timestamp
+            prev_close = close
+
+        if total_records == 0:
+            return {'valid': True, 'errors': [], 'warnings': []}
+
+        errors = []
+        warnings = []
+
+        if out_of_order:
+            errors.append({
+                'type': 'out_of_order_timestamp',
+                'count': len(out_of_order),
+                'indices': out_of_order
+            })
+
+        if price_jumps:
+            warnings.append({
+                'type': 'price_jump',
+                'count': len(price_jumps),
+                'details': price_jumps[:10]
+            })
+
+        if volume_spikes:
+            warnings.append({
+                'type': 'volume_spike',
+                'count': len(volume_spikes),
+                'details': volume_spikes[:10]
+            })
+
+        if gaps and check_missing_intervals:
+            warnings.append({
+                'type': 'missing_interval',
+                'count': len(gaps),
+                'details': gaps[:10]
+            })
+
+        return {
+            'valid': len(errors) == 0,
+            'total_records': total_records,
+            'errors': errors,
+            'warnings': warnings
+        }
