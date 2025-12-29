@@ -544,12 +544,17 @@ def main():
     output_dir = Path('results/backtest_results')
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # 同時保存到報表目錄（標準格式）
+    report_dir = Path('results/backtest_reports')
+    report_dir.mkdir(parents=True, exist_ok=True)
+
     # 保存詳細結果
     for strategy_name, results in strategies_results.items():
+        # 舊格式目錄（向後相容）
         strategy_dir = output_dir / strategy_name
         strategy_dir.mkdir(exist_ok=True)
 
-        # 保存指標
+        # 保存指標（舊格式）
         with open(strategy_dir / 'metrics.json', 'w') as f:
             json.dump(results['metrics'], f, indent=2)
 
@@ -557,6 +562,29 @@ def main():
         trades_df = pd.DataFrame(results['backtest']['trades'])
         if not trades_df.empty:
             trades_df.to_csv(strategy_dir / 'trades.csv', index=False)
+
+        # === 新增：保存標準格式到報表目錄 ===
+        report_strategy_dir = report_dir / strategy_name
+        report_strategy_dir.mkdir(exist_ok=True)
+
+        # 準備標準格式的 JSON 資料
+        result_json = {
+            'strategy_name': strategy_name,
+            'metadata': {
+                'generated_at': datetime.now().isoformat(),
+                'symbol': 'BTC/USDT',  # 可從 results 中提取
+                'description': results.get('description', ''),
+            },
+            'metrics': results['metrics'],
+            'has_visualizations': False,  # 此腳本不生成視覺化
+        }
+
+        # 保存標準格式 JSON
+        json_path = report_strategy_dir / f"{strategy_name}_results.json"
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(result_json, f, indent=2, ensure_ascii=False, default=str)
+
+        logger.info(f"✓ 標準格式 JSON 已保存：{json_path}")
 
     # 10. 繪製圖表
     plot_backtest_results(strategies_results, output_dir)

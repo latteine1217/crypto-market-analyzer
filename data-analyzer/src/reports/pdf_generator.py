@@ -16,9 +16,11 @@ from .html_generator import HTMLReportGenerator
 try:
     from weasyprint import HTML, CSS
     WEASYPRINT_AVAILABLE = True
-except ImportError:
+except (ImportError, OSError, Exception) as e:
     WEASYPRINT_AVAILABLE = False
-    logger.warning("WeasyPrint 未安裝，PDF 功能將受限")
+    logger.warning(f"WeasyPrint 不可用：{type(e).__name__}")
+    HTML = None
+    CSS = None
 
 
 class PDFReportGenerator:

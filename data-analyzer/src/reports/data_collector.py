@@ -162,17 +162,40 @@ class ReportDataCollector:
             if strategies and strategy_name not in strategies:
                 continue
 
-            # 查找 JSON 結果檔案（如果存在）
-            json_file = strategy_dir / f"{strategy_name}_results.json"
-            if json_file.exists():
-                try:
-                    with open(json_file, 'r') as f:
-                        result_data = json.load(f)
-                    results.append(result_data)
-                    logger.debug(f"載入 JSON 結果：{json_file}")
-                    continue
-                except Exception as e:
-                    logger.warning(f"讀取 JSON 失敗：{json_file}，錯誤：{e}")
+            # 查找 JSON 結果檔案（支援多種檔名格式）
+            json_candidates = [
+                strategy_dir / f"{strategy_name}_results.json",  # 標準格式
+                strategy_dir / "metrics.json",  # 舊格式
+                strategy_dir / f"{strategy_name}.json",  # 替代格式
+            ]
+
+            json_loaded = False
+            for json_file in json_candidates:
+                if json_file.exists():
+                    try:
+                        with open(json_file, 'r') as f:
+                            result_data = json.load(f)
+
+                        # 確保資料包含 strategy_name
+                        if 'strategy_name' not in result_data:
+                            result_data['strategy_name'] = strategy_name
+
+                        # 如果只有 metrics，包裝成標準格式
+                        if 'metrics' in result_data and 'strategy_name' not in result_data:
+                            result_data = {
+                                'strategy_name': strategy_name,
+                                'metrics': result_data
+                            }
+
+                        results.append(result_data)
+                        logger.debug(f"✓ 載入 JSON 結果：{json_file.name}")
+                        json_loaded = True
+                        break
+                    except Exception as e:
+                        logger.warning(f"讀取 JSON 失敗：{json_file}，錯誤：{e}")
+
+            if json_loaded:
+                continue
 
             # 如果沒有 JSON，從圖表推斷基本資訊
             png_files = list(strategy_dir.glob("*.png"))
@@ -183,7 +206,7 @@ class ReportDataCollector:
                     'visualization_files': [str(f) for f in png_files],
                     'metrics': None,  # 無結構化資料
                 })
-                logger.debug(f"找到視覺化檔案：{strategy_name}")
+                logger.debug(f"找到視覺化檔案：{strategy_name}（無 JSON 資料）")
 
         logger.info(f"收集到 {len(results)} 個策略的回測結果")
         return results

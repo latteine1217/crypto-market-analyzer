@@ -16,6 +16,7 @@ import pandas as pd
 import json
 import time
 import psycopg2
+import pytz
 
 from .data_collector import ReportDataCollector
 from .html_generator import HTMLReportGenerator
@@ -34,7 +35,8 @@ class ReportAgent:
         self,
         output_dir: str = "reports",
         db_config: Optional[Dict] = None,
-        email_config: Optional[Dict] = None
+        email_config: Optional[Dict] = None,
+        timezone: str = "Asia/Taipei"
     ):
         """
         初始化 Report Agent
@@ -43,9 +45,13 @@ class ReportAgent:
             output_dir: 報表輸出目錄
             db_config: 資料庫配置
             email_config: 郵件配置
+            timezone: 時區（預設：Asia/Taipei, UTC+8）
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # 設定時區
+        self.tz = pytz.timezone(timezone)
 
         # 初始化資料收集器
         self.data_collector = ReportDataCollector(db_config=db_config)
@@ -106,7 +112,7 @@ class ReportAgent:
 
         # 確定時間範圍
         if end_date is None:
-            end_date = datetime.now()
+            end_date = datetime.now(self.tz)
         if start_date is None:
             start_date = self._get_start_date_by_type(report_type, end_date)
 
@@ -146,7 +152,8 @@ class ReportAgent:
                 'report_type': report_type,
                 'start_date': start_date.isoformat(),
                 'end_date': end_date.isoformat(),
-                'generated_at': datetime.now().isoformat(),
+                'generated_at': datetime.now(self.tz).isoformat(),
+                'timezone': str(self.tz),
                 'markets': markets or 'all',
                 'strategies': strategies or 'all',
             },
@@ -274,7 +281,8 @@ class ReportAgent:
         report_data = {
             'metadata': {
                 'strategy_name': strategy_name,
-                'generated_at': datetime.now().isoformat(),
+                'generated_at': datetime.now(self.tz).isoformat(),
+                'timezone': str(self.tz),
                 'data_period': {
                     'start': market_data.index[0].isoformat(),
                     'end': market_data.index[-1].isoformat(),
@@ -334,7 +342,7 @@ class ReportAgent:
         """
         logger.info(f"生成資料品質報表（過去 {hours} 小時）")
 
-        end_date = datetime.now()
+        end_date = datetime.now(self.tz)
         start_date = end_date - timedelta(hours=hours)
 
         # 收集資料品質摘要
@@ -348,6 +356,7 @@ class ReportAgent:
             'metadata': {
                 'report_type': 'data_quality',
                 'generated_at': end_date.isoformat(),
+                'timezone': str(self.tz),
                 'hours': hours,
                 'markets': markets or 'all',
             },

@@ -203,6 +203,7 @@ def test_backtest():
     for strategy_name, results in strategies_to_visualize:
         print(f"\n正在生成 {strategy_name} 報告...")
 
+        # 生成視覺化報告
         visualizer.plot_comprehensive_report(
             equity_curve=results['equity_curve'],
             market_data=market_data,
@@ -212,6 +213,32 @@ def test_backtest():
             strategy_name=strategy_name,
             save_dir=str(report_dir / strategy_name)
         )
+
+        # 保存 JSON 結構化資料
+        strategy_result_dir = report_dir / strategy_name
+        strategy_result_dir.mkdir(parents=True, exist_ok=True)
+
+        result_json = {
+            'strategy_name': strategy_name,
+            'metadata': {
+                'generated_at': pd.Timestamp.now().isoformat(),
+                'symbol': 'BTC/USDT',
+                'data_period': {
+                    'start': market_data.index[0].isoformat(),
+                    'end': market_data.index[-1].isoformat(),
+                },
+                'total_bars': len(market_data),
+            },
+            'metrics': results['metrics'],
+            'has_visualizations': True,
+        }
+
+        json_path = strategy_result_dir / f"{strategy_name}_results.json"
+        with open(json_path, 'w', encoding='utf-8') as f:
+            import json
+            json.dump(result_json, f, indent=2, ensure_ascii=False, default=str)
+
+        print(f"✓ JSON 資料已保存：{json_path.name}")
 
     print("\n" + "=" * 60)
     print("✅ 回測測試完成！")
