@@ -1,0 +1,271 @@
+# TimescaleDB 資料保留策略告警規則
+
+groups:
+  - name: timescaledb_retention_alerts
+    interval: 60s
+    rules:
+      # ========== 連續聚合告警 ==========
+      
+      # Alert 1: 連續聚合視圖超過 2 小時未更新
+      - alert: ContinuousAggregateStale
+        expr: |
+          (time() - timescaledb_continuous_aggregate_last_update_timestamp) > 7200
+        for: 10m
+        labels:
+          severity: warning
+          component: timescaledb
+          category: continuous_aggregate
+        annotations:
+          summary: "連續聚合視圖 {{ $labels.view_name }} 超過 2 小時未更新"
+          description: |
+            視圖 {{ $labels.view_name }} 最後更新時間：{{ $value | humanizeDuration }} 前
+            這可能表示聚合 job 執行失敗或資料收集中斷
+      
+      # Alert 2: 連續聚合視圖記錄數異常少
+      - alert: ContinuousAggregateRecordCountLow
+        expr: |
+          timescaledb_continuous_aggregate_record_count < 100
+          and
+          timescaledb_continuous_aggregate_record_count > 0
+        for: 30m
+        labels:
+          severity: warning
+          component: timescaledb
+          category: continuous_aggregate
+        annotations:
+          summary: "連續聚合視圖 {{ $labels.view_name }} 記錄數異常少"
+          description: |
+            視圖 {{ $labels.view_name }} 只有 {{ $value }} 筆記錄
+            這可能表示資料收集問題或聚合配置錯誤
+      
+      # Alert 3: 聚合視圖資料過時（最新資料超過 6 小時）
+      - alert: ContinuousAggregateDataOutdated
+        expr: |
+          (time() - timescaledb_continuous_aggregate_newest_data_timestamp) > 21600
+        for: 15m
+        labels:
+          severity: warning
+          component: timescaledb
+          category: continuous_aggregate
+        annotations:
+          summary: "連續聚合視圖 {{ $labels.view_name }} 資料過時"
+          description: |
+            視圖 {{ $labels.view_name }} 最新資料時間：{{ $value | humanizeDuration }} 前
+            資料收集可能已中斷
+      
+      # ========== TimescaleDB Jobs 告警 ==========
+      
+      # Alert 4: TimescaleDB Job 被禁用
+      - alert: TimescaleDBJobDisabled
+        expr: |
+          timescaledb_job_enabled == 0
+        for: 5m
+        labels:
+          severity: warning
+          component: timescaledb
+          category: job
+        annotations:
+          summary: "TimescaleDB Job {{ $labels.job_id }} 被禁用"
+          description: |
+            Job {{ $labels.job_id }} ({{ $labels.job_type }}) 已被禁用
+            Hypertable: {{ $labels.hypertable_name }}
+            請檢查是否為預期行為
+      
+      # Alert 5: TimescaleDB Job 超過 2 小時未執行
+      - alert: TimescaleDBJobNotRunning
+        expr: |
+          (time() - timescaledb_job_last_run_timestamp) > 7200
+          and
+          timescaledb_job_enabled == 1
+        for: 10m
+        labels:
+          severity: critical
+          component: timescaledb
+          category: job
+        annotations:
+          summary: "TimescaleDB Job {{ $labels.job_id }} 超過 2 小時未執行"
+          description: |
+            Job {{ $labels.job_id }} ({{ $labels.job_type }}) 最後執行時間：{{ $value | humanizeDuration }} 前
+            Hypertable: {{ $labels.hypertable_name }}
+            Job 可能已失敗或排程異常
+      
+      # Alert 6: TimescaleDB Job 最後執行失敗
+      - alert: TimescaleDBJobLastRunFailed
+        expr: |
+          (timescaledb_job_last_run_timestamp - timescaledb_job_last_success_timestamp) > 60
+          and
+          timescaledb_job_enabled == 1
+        for: 5m
+        labels:
+          severity: critical
+          component: timescaledb
+          category: job
+        annotations:
+          summary: "TimescaleDB Job {{ $labels.job_id }} 最後執行失敗"
+          description: |
+            Job {{ $labels.job_id }} ({{ $labels.job_type }}) 最後執行失敗
+            Hypertable: {{ $labels.hypertable_name }}
+            最後成功：{{ $labels.last_success_timestamp | humanizeTimestamp }}
+            最後執行：{{ $labels.last_run_timestamp | humanizeTimestamp }}
+      
+      # Alert 7: TimescaleDB Job 執行時間過長
+      - alert: TimescaleDBJobSlowExecution
+        expr: |
+          timescaledb_job_total_duration_seconds > 600
+        for: 5m
+        labels:
+          severity: warning
+          component: timescaledb
+          category: job
+        annotations:
+          summary: "TimescaleDB Job {{ $labels.job_id }} 執行時間過長"
+          description: |
+            Job {{ $labels.job_id }} ({{ $labels.job_type }}) 執行時長：{{ $value | humanizeDuration }}
+            Hypertable: {{ $labels.hypertable_name }}
+            可能需要優化或檢查資料量
+
+      # ========== 資料保留策略告警 ==========
+      
+      # Alert 8: 實際保留期間超過預期太多（超過 20%）
+      - alert: DataRetentionDeviation
+        expr: |
+          timescaledb_data_retention_deviation_days > 
+            (timescaledb_data_expected_retention_days * 0.2)
+          and
+          timescaledb_data_expected_retention_days > 0
+        for: 1h
+        labels:
+          severity: warning
+          component: timescaledb
+          category: retention
+        annotations:
+          summary: "{{ $labels.layer }} 資料保留期間偏差過大"
+          description: |
+            層級：{{ $labels.layer }}
+            實際保留：{{ $labels.actual_retention_days }} 天
+            預期保留：{{ $labels.expected_retention_days }} 天
+            偏差：{{ $value }} 天
+            保留策略可能未正常執行
+      
+      # Alert 9: 資料保留期間嚴重超標（超過 50%）
+      - alert: DataRetentionSevereDeviation
+        expr: |
+          timescaledb_data_retention_deviation_days > 
+            (timescaledb_data_expected_retention_days * 0.5)
+          and
+          timescaledb_data_expected_retention_days > 0
+        for: 30m
+        labels:
+          severity: critical
+          component: timescaledb
+          category: retention
+        annotations:
+          summary: "{{ $labels.layer }} 資料保留期間嚴重超標 🚨"
+          description: |
+            層級：{{ $labels.layer }}
+            實際保留：{{ $labels.actual_retention_days }} 天
+            預期保留：{{ $labels.expected_retention_days }} 天
+            偏差：{{ $value }} 天
+            ⚠️ 保留策略可能已失效，請立即檢查！
+      
+      # Alert 10: 資料層記錄數異常少
+      - alert: DataLayerRecordCountLow
+        expr: |
+          timescaledb_data_total_records < 1000
+          and
+          timescaledb_data_total_records > 0
+        for: 1h
+        labels:
+          severity: warning
+          component: timescaledb
+          category: retention
+        annotations:
+          summary: "{{ $labels.layer }} 資料記錄數異常少"
+          description: |
+            層級：{{ $labels.layer }}
+            記錄數：{{ $value }}
+            可能是資料收集問題或資料被過度清理
+      
+      # ========== 資料完整性告警 ==========
+      
+      # Alert 11: 聚合壓縮比異常
+      - alert: AggregateCompressionRatioAbnormal
+        expr: |
+          abs(timescaledb_aggregate_compression_ratio - 5) > 1.5
+        for: 30m
+        labels:
+          severity: warning
+          component: timescaledb
+          category: data_integrity
+        annotations:
+          summary: "聚合壓縮比異常"
+          description: |
+            {{ $labels.source_layer }} 到 {{ $labels.target_layer }} 壓縮比：{{ $value }}
+            預期約為 5:1
+            可能表示資料缺失或聚合配置問題
+      
+      # ========== 儲存空間告警 ==========
+      
+      # Alert 12: 表空間使用量過大（超過 50GB）
+      - alert: TableSizeExcessive
+        expr: |
+          timescaledb_table_size_bytes > 50 * 1024 * 1024 * 1024
+        for: 1h
+        labels:
+          severity: warning
+          component: timescaledb
+          category: storage
+        annotations:
+          summary: "表 {{ $labels.table_name }} 空間使用量過大"
+          description: |
+            表：{{ $labels.table_name }}
+            大小：{{ $value }} bytes (> 50GB)
+            建議檢查資料保留策略是否正常運行
+      
+      # Alert 13: 索引空間使用量過大（超過表空間）
+      - alert: IndexSizeExcessive
+        expr: |
+          timescaledb_index_size_bytes > timescaledb_table_size_bytes
+        for: 1h
+        labels:
+          severity: warning
+          component: timescaledb
+          category: storage
+        annotations:
+          summary: "表 {{ $labels.table_name }} 索引空間超過表空間"
+          description: |
+            表：{{ $labels.table_name }}
+            索引大小：{{ $value }} bytes
+            可能需要重建索引或檢查索引配置
+      
+      # ========== 監控服務本身的告警 ==========
+      
+      # Alert 14: 保留監控服務超過 10 分鐘未檢查
+      - alert: RetentionMonitorNotChecking
+        expr: |
+          (time() - timescaledb_retention_monitor_last_check_timestamp) > 600
+        for: 5m
+        labels:
+          severity: critical
+          component: retention_monitor
+          category: service
+        annotations:
+          summary: "資料保留監控服務超過 10 分鐘未執行檢查"
+          description: |
+            最後檢查時間：{{ $value | humanizeDuration }} 前
+            監控服務可能已停止運行
+      
+      # Alert 15: 保留監控檢查執行時間過長
+      - alert: RetentionMonitorSlowCheck
+        expr: |
+          timescaledb_retention_monitor_check_duration_seconds > 60
+        for: 5m
+        labels:
+          severity: warning
+          component: retention_monitor
+          category: performance
+        annotations:
+          summary: "資料保留監控檢查執行時間過長"
+          description: |
+            檢查執行時長：{{ $value }}秒
+            可能表示資料庫負載過高或查詢效率問題
