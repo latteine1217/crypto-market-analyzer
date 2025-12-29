@@ -84,3 +84,133 @@ models/checkpoints/
 
 # OS
 Thumbs.db
+
+# ============================================
+# 隱私與敏感資訊
+# ============================================
+# 實際環境變數檔案（保留 .example 範本）
+.env
+.env.*
+!.env.example
+*.env
+!*.env.example
+
+# API Keys 與憑證
+**/credentials.json
+**/secrets.yaml
+**/secret.yaml
+**/*secret*.json
+**/*secret*.yaml
+**/*credentials*.json
+**/*api_key*.txt
+**/*password*.txt
+
+# ============================================
+# 生成的報表與結果檔案
+# ============================================
+# 報表輸出（保留目錄結構）
+reports/daily/*.html
+reports/daily/*.pdf
+reports/weekly/*.html
+reports/weekly/*.pdf
+reports/monthly/*.html
+reports/monthly/*.pdf
+reports/generated/
+
+# 結果與圖表（保留目錄結構）
+results/**/*.png
+results/**/*.jpg
+results/**/*.jpeg
+data-analyzer/results/**/*.png
+data-analyzer/results/**/*.jpg
+data-analyzer/results/**/*.csv
+
+# ============================================
+# 機器學習模型與檢查點
+# ============================================
+# 模型權重檔案
+*.pkl
+*.h5
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+models/checkpoints/
+**/checkpoints/
+**/saved_models/
+
+# ============================================
+# 資料檔案
+# ============================================
+# 原始與處理後的資料
+data/**/*.csv
+data/**/*.parquet
+data/**/*.json
+data/**/*.feather
+!data/**/*example*.csv
+!data/**/*sample*.csv
+
+# ============================================
+# 快取與暫存檔案
+# ============================================
+# Python 快取
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Jupyter 快取
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+
+# Node.js 快取
+node_modules/
+.npm/
+.yarn/
+package-lock.json
+yarn.lock
+
+# ============================================
+# 開發工具配置（個人化設定）
+# ============================================
+.vscode/settings.json
+.vscode/launch.json
+.idea/workspace.xml
+.idea/tasks.xml
+*.swp
+*.swo
+*~
+
+# ============================================
+# Docker 與容器相關
+# ============================================
+docker-compose.override.yml
+.docker/
+
+# ============================================
+# 監控與日誌
+# ============================================
+logs/
+*.log
+monitoring/test_results/
+*.log.*
+
+# ============================================
+# 測試與臨時檔案
+# ============================================
+test_*.db
+test_*.sqlite
+tmp/
+temp/
+*.tmp
+.DS_Store
