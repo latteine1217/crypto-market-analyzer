@@ -4,10 +4,10 @@
 global:
   resolve_timeout: 5m
   # SMTP 配置（從環境變數讀取）
-  smtp_smarthost: 'smtp.gmail.com:587'
-  smtp_from: 'felix.tc.tw@gmail.com'
-  smtp_auth_username: 'felix.tc.tw@gmail.com'
-  smtp_auth_password: 'gvntbgaobsmsugdv'
+  smtp_smarthost: '${SMTP_HOST}:${SMTP_PORT}'
+  smtp_from: '${SMTP_FROM}'
+  smtp_auth_username: '${SMTP_USER}'
+  smtp_auth_password: '${SMTP_PASSWORD}'
   smtp_require_tls: true
 
 # 告警路由配置
@@ -35,7 +35,7 @@ receivers:
   # Email 通知（一般告警）
   - name: 'email-notifications'
     email_configs:
-      - to: 'felix.tc.tw@gmail.com'
+      - to: '${ALERT_EMAIL_TO}'
         headers:
           Subject: '[Crypto Analyzer] Alert: {{ .GroupLabels.alertname }}'
         html: |
@@ -55,7 +55,7 @@ receivers:
   # Email 通知（嚴重告警）
   - name: 'email-critical'
     email_configs:
-      - to: 'felix.tc.tw@gmail.com'
+      - to: '${ALERT_EMAIL_TO}'
         headers:
           Subject: '[CRITICAL] Crypto Analyzer Alert: {{ .GroupLabels.alertname }}'
         html: |
@@ -75,7 +75,7 @@ receivers:
   # Email 通知（警告告警）
   - name: 'email-warning'
     email_configs:
-      - to: 'felix.tc.tw@gmail.com'
+      - to: '${ALERT_EMAIL_TO}'
         headers:
           Subject: '[WARNING] Crypto Analyzer Alert: {{ .GroupLabels.alertname }}'
         html: |
