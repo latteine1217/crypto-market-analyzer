@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-gray-900 rounded-lg border border-gray-800 p-6;
+  }
+  
+  .card-header {
+    @apply text-lg font-semibold mb-4 pb-2 border-b border-gray-800;
+  }
+  
+  .btn-primary {
+    @apply bg-primary hover:bg-primary-dark text-white font-medium py-2 px-4 rounded transition-colors;
+  }
+  
+  .stat-card {
+    @apply card flex flex-col items-center justify-center;
+  }
+  
+  .stat-label {
+    @apply text-sm text-gray-400 mb-1;
+  }
+  
+  .stat-value {
+    @apply text-2xl font-bold;
+  }
+}

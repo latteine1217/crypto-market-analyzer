@@ -20,14 +20,14 @@ groups:
       # Alert 2: 某 symbol 當日缺失率 > 5%
       - alert: HighDataMissingRate
         expr: |
-          (collector_missing_data_rate{period="daily"} > 0.05) * 100
+          collector_missing_data_rate{period="daily"} > 0.05
         for: 10m
         labels:
           severity: warning
           component: quality
         annotations:
           summary: "{{ $labels.symbol }} 當日資料缺失率過高"
-          description: "{{ $labels.symbol }} 當日缺失率：{{ $value | humanizePercentage }}%（閾值：5%）"
+          description: "{{ $labels.symbol }} 當日缺失率：{{ $value | printf \"%.2f%%\" }}（閾值：5%）"
 
       # Alert 3: Collector 程式異常退出
       - alert: CollectorProcessDown
@@ -58,24 +58,36 @@ groups:
           component: collector
         annotations:
           summary: "API 錯誤率過高"
-          description: "過去 1 小時 API 錯誤率：{{ $value | humanizePercentage }}%（閾值：10%）"
+          description: "過去 1 小時 API 錯誤率：{{ $value | printf \"%.2f%%\" }}（閾值：10%）"
 
   - name: database_alerts
     interval: 60s
     rules:
-      # DB 寫入速率異常低
+      # DB 寫入速率異常低（修正版本：使用合理閾值與清晰單位）
       - alert: LowDatabaseWriteRate
         expr: |
-          (rate(collector_db_writes_total[1h]) < 100)
+          (rate(collector_db_writes_total[5m]) < 0.01)
           and
-          (rate(collector_db_writes_total[1h]) > 0)
-        for: 15m
+          (rate(collector_db_writes_total[5m]) > 0)
+        for: 10m
         labels:
           severity: warning
           component: database
         annotations:
           summary: "資料庫寫入速率異常低"
-          description: "過去 1 小時平均寫入：{{ $value | humanize }} rows/sec（預期：> 100）"
+          description: "過去 5 分鐘平均寫入：{{ $value | printf \"%.4f\" }} rows/sec（預期：≥ 0.01），資料收集可能停滯"
+
+      # 資料收集完全停止（更嚴重的情況）
+      - alert: DatabaseWriteStopped
+        expr: |
+          rate(collector_db_writes_total[10m]) == 0
+        for: 10m
+        labels:
+          severity: critical
+          component: database
+        annotations:
+          summary: "資料庫寫入完全停止"
+          description: "過去 10 分鐘沒有任何資料寫入，收集器可能已停止運行"
 
   - name: system_alerts
     interval: 60s
@@ -121,7 +133,7 @@ groups:
           component: price_monitor
         annotations:
           summary: "{{ $labels.symbol }} 價格急劇上漲"
-          description: "{{ $labels.symbol }} 在 5 分鐘內上漲 {{ $value | humanize }}%（當前價格：{{ $labels.price }}）"
+          description: "{{ $labels.symbol }} 在 5 分鐘內上漲 {{ $value | printf \"%.2f%%\" }}（當前價格：{{ $labels.price }}）"
 
       # 價格急劇下跌（5 分鐘內跌幅超過 3%）
       - alert: PriceDrop
@@ -136,7 +148,7 @@ groups:
           component: price_monitor
         annotations:
           summary: "{{ $labels.symbol }} 價格急劇下跌"
-          description: "{{ $labels.symbol }} 在 5 分鐘內下跌 {{ $value | humanize }}%（當前價格：{{ $labels.price }}）"
+          description: "{{ $labels.symbol }} 在 5 分鐘內下跌 {{ $value | printf \"%.2f%%\" }}（當前價格：{{ $labels.price }}）"
 
       # 價格極端波動（5 分鐘內漲跌幅超過 5%）
       - alert: ExtremePriceVolatility
@@ -151,7 +163,7 @@ groups:
           component: price_monitor
         annotations:
           summary: "{{ $labels.symbol }} 價格極端波動"
-          description: "{{ $labels.symbol }} 在 5 分鐘內波動 {{ $value | humanize }}%（當前價格：{{ $labels.price }}）⚠️ 需要立即關注！"
+          description: "{{ $labels.symbol }} 在 5 分鐘內波動 {{ $value | printf \"%.2f%%\" }}（當前價格：{{ $labels.price }}）⚠️ 需要立即關注！"
 
       # 價格異常停滯（10 分鐘內價格無變化）
       - alert: PriceStagnant
@@ -207,7 +219,7 @@ groups:
           component: mad_detector
         annotations:
           summary: "{{ $labels.symbol }} 異常檢測率過高"
-          description: "{{ $labels.symbol }} 過去 1 小時異常檢測率: {{ $value | humanizePercentage }}%（超過 10%），市場可能處於高波動狀態"
+          description: "{{ $labels.symbol }} 過去 1 小時異常檢測率: {{ $value | printf \"%.2f%%\" }}（超過 10%），市場可能處於高波動狀態"
 
       # MAD 檢測服務停止運行
       - alert: MADDetectorDown
@@ -231,4 +243,4 @@ groups:
           component: mad_detector
         annotations:
           summary: "MAD 異常檢測延遲過高"
-          description: "{{ $labels.symbol }} 的 99 分位檢測延遲: {{ $value | humanize }}s（預期: < 5s），可能影響即時監控"
+          description: "{{ $labels.symbol }} 的 99 分位檢測延遲: {{ $value | printf \"%.2f\" }}s（預期: < 5s），可能影響即時監控"

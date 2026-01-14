@@ -10,6 +10,7 @@ import {
   Trade,
   OrderBookUpdate,
   OrderBookSnapshot,
+  Kline,
   MessageType,
   QueueMessage,
   WSConfig,
@@ -157,6 +158,11 @@ export class BybitWSClient extends EventEmitter {
       if (this.config.streams.includes('depth')) {
         args.push(`orderbook.50.${symbol}`);
       }
+
+      // 訂閱 K線（1分鐘）
+      if (this.config.streams.includes('kline_1m') || this.config.streams.includes('kline')) {
+        args.push(`kline.1.${symbol}`);
+      }
     });
 
     const subscribeMessage = {
@@ -227,6 +233,10 @@ export class BybitWSClient extends EventEmitter {
     // 處理訂單簿數據
     else if (topic.startsWith('orderbook.')) {
       this.handleOrderBook(data, topic, message.type);
+    }
+    // 處理 K線數據
+    else if (topic.startsWith('kline.')) {
+      this.handleKline(data, topic);
     }
   }
 
@@ -310,6 +320,67 @@ export class BybitWSClient extends EventEmitter {
       const count = this.stats.messagesByType.get(MessageType.ORDERBOOK_UPDATE) || 0;
       this.stats.messagesByType.set(MessageType.ORDERBOOK_UPDATE, count + 1);
     }
+  }
+
+  /**
+   * 處理 K線數據
+   * Bybit K線格式: topic = "kline.{interval}.{symbol}"
+   * interval: 1 = 1分鐘, 3 = 3分鐘, 5 = 5分鐘, 15 = 15分鐘, 30 = 30分鐘, 
+   *           60 = 1小時, 120 = 2小時, 240 = 4小時, 360 = 6小時, 720 = 12小時, D = 日, W = 週, M = 月
+   */
+  private handleKline(klines: any[], topic: string): void {
+    const parts = topic.split('.');
+    const intervalCode = parts[1]; // "1", "5", "60", "D", etc.
+    const symbol = parts[2];
+
+    // 將 Bybit interval code 轉換為標準格式
+    const intervalMap: { [key: string]: string } = {
+      '1': '1m',
+      '3': '3m',
+      '5': '5m',
+      '15': '15m',
+      '30': '30m',
+      '60': '1h',
+      '120': '2h',
+      '240': '4h',
+      '360': '6h',
+      '720': '12h',
+      'D': '1d',
+      'W': '1w',
+      'M': '1M'
+    };
+
+    const interval = intervalMap[intervalCode] || `${intervalCode}m`;
+
+    klines.forEach(kline => {
+      const klineData: Kline = {
+        symbol: symbol,
+        interval: interval,
+        openTime: kline.start,
+        closeTime: kline.end,
+        open: parseFloat(kline.open),
+        high: parseFloat(kline.high),
+        low: parseFloat(kline.low),
+        close: parseFloat(kline.close),
+        volume: parseFloat(kline.volume),
+        quoteVolume: parseFloat(kline.turnover), // Bybit 使用 turnover 表示成交額
+        trades: 0, // Bybit K線不提供交易筆數
+        isClosed: kline.confirm // Bybit: confirm = true 表示 K線已完結
+      };
+
+      const queueMessage: QueueMessage = {
+        type: MessageType.KLINE,
+        exchange: 'bybit',
+        data: klineData,
+        receivedAt: Date.now()
+      };
+
+      this.emit('message', queueMessage);
+
+      // 更新統計
+      const count = this.stats.messagesByType.get(MessageType.KLINE) || 0;
+      this.stats.messagesByType.set(MessageType.KLINE, count + 1);
+    });
   }
 
   /**

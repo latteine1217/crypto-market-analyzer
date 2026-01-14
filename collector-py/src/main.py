@@ -21,6 +21,8 @@ from config import settings
 from config_loader import ConfigLoader, CollectorConfig
 from connectors.binance_rest import BinanceRESTConnector
 from connectors.okx_rest import OKXRESTConnector
+from connectors.funding_rate_collector import FundingRateCollector
+from connectors.open_interest_collector import OpenInterestCollector
 from loaders.db_loader import DatabaseLoader
 from validators.data_validator import DataValidator
 from schedulers.backfill_scheduler import BackfillScheduler
@@ -32,6 +34,7 @@ from error_handler import (
     global_failure_tracker
 )
 from metrics_exporter import start_metrics_server, CollectorMetrics
+from monitors.retention_monitor import RetentionMonitor
 
 
 # 配置日誌
@@ -78,9 +81,24 @@ class ConfigDrivenCollector:
             backfill_scheduler=self.backfill_scheduler
         )
 
+        # 初始化 Retention Monitor
+        db_config = {
+            'host': settings.postgres_host,
+            'port': settings.postgres_port,
+            'database': settings.postgres_db,
+            'user': settings.postgres_user,
+            'password': settings.postgres_password
+        }
+        self.retention_monitor = RetentionMonitor(db_config, metrics=self.metrics)
+
         # 建立連接器映射
         self.connectors = {}
         self._init_connectors()
+
+        # 初始化 Funding Rate 和 Open Interest Collectors
+        self.funding_rate_collectors = {}
+        self.open_interest_collectors = {}
+        self._init_derivatives_collectors()
 
         logger.info(f"ConfigDrivenCollector initialized with {len(self.collector_configs)} configs")
 
@@ -104,6 +122,40 @@ class ConfigDrivenCollector:
                 self.connectors['okx'] = OKXRESTConnector()
 
         logger.info(f"Initialized connectors for: {list(self.connectors.keys())}")
+
+    def _init_derivatives_collectors(self):
+        """初始化衍生品（資金費率、未平倉量）收集器"""
+        exchanges = set(cfg.exchange.name for cfg in self.collector_configs)
+
+        for exchange_name in exchanges:
+            try:
+                # 取得 API 配置（如果有的話）
+                cfg = next(
+                    (c for c in self.collector_configs if c.exchange.name == exchange_name),
+                    None
+                )
+                api_key = cfg.exchange.api_key if cfg else None
+                api_secret = cfg.exchange.api_secret if cfg else None
+
+                # 初始化 Funding Rate Collector
+                self.funding_rate_collectors[exchange_name] = FundingRateCollector(
+                    exchange_name=exchange_name,
+                    api_key=api_key,
+                    api_secret=api_secret
+                )
+
+                # 初始化 Open Interest Collector
+                self.open_interest_collectors[exchange_name] = OpenInterestCollector(
+                    exchange_name=exchange_name,
+                    api_key=api_key,
+                    api_secret=api_secret
+                )
+            except Exception as e:
+                logger.warning(f"Failed to initialize derivatives collectors for {exchange_name}: {e}")
+
+        logger.info(f"Initialized funding rate collectors for: {list(self.funding_rate_collectors.keys())}")
+        logger.info(f"Initialized open interest collectors for: {list(self.open_interest_collectors.keys())}")
+
 
     def collect_ohlcv(self, config: CollectorConfig):
         """
@@ -310,6 +362,75 @@ class ConfigDrivenCollector:
         logger.info("Data collection cycle completed")
         logger.info("=" * 80 + "\n")
 
+    def run_funding_rate_collection(self):
+        """收集資金費率"""
+        logger.info("=" * 50)
+        logger.info("Funding Rate Collection Started")
+        logger.info("=" * 50)
+
+        # 要收集的主要交易對
+        target_symbols = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT']
+
+        for exchange_name, collector in self.funding_rate_collectors.items():
+            try:
+                logger.info(f"\nCollecting funding rates from {exchange_name.upper()}")
+
+                # 批次抓取資金費率
+                funding_rates = collector.fetch_funding_rates_batch(target_symbols)
+
+                # 寫入資料庫
+                for funding_data in funding_rates:
+                    try:
+                        symbol = funding_data['symbol']
+                        market_id = self.db.get_market_id(exchange_name, symbol)
+                        if market_id:
+                            self.db.insert_funding_rate(market_id, funding_data)
+                            logger.debug(f"✓ Saved funding rate for {symbol}")
+                    except Exception as e:
+                        logger.error(f"Failed to save funding rate for {symbol}: {e}")
+
+                logger.success(f"Collected {len(funding_rates)} funding rates from {exchange_name}")
+
+            except Exception as e:
+                logger.error(f"Failed to collect funding rates from {exchange_name}: {e}")
+
+        logger.info("=" * 50 + "\n")
+
+    def run_open_interest_collection(self):
+        """收集未平倉量"""
+        logger.info("=" * 50)
+        logger.info("Open Interest Collection Started")
+        logger.info("=" * 50)
+
+        # 要收集的主要交易對
+        target_symbols = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT']
+
+        for exchange_name, collector in self.open_interest_collectors.items():
+            try:
+                logger.info(f"\nCollecting open interest from {exchange_name.upper()}")
+
+                # 批次抓取未平倉量
+                oi_records = collector.fetch_open_interest_batch(target_symbols)
+
+                # 寫入資料庫
+                for oi_data in oi_records:
+                    try:
+                        symbol = oi_data['symbol']
+                        market_id = self.db.get_market_id(exchange_name, symbol)
+                        if market_id:
+                            self.db.insert_open_interest(market_id, oi_data)
+                            logger.debug(f"✓ Saved open interest for {symbol}")
+                    except Exception as e:
+                        logger.error(f"Failed to save open interest for {symbol}: {e}")
+
+                logger.success(f"Collected {len(oi_records)} open interest records from {exchange_name}")
+
+            except Exception as e:
+                logger.error(f"Failed to collect open interest from {exchange_name}: {e}")
+
+        logger.info("=" * 50 + "\n")
+
+
     def run_quality_check_cycle(self):
         """執行品質檢查循環"""
         logger.info("=" * 80)
@@ -385,19 +506,78 @@ class ConfigDrivenCollector:
                 # 更新任務狀態為 running
                 self.backfill_scheduler.update_task_status(task_id, 'running')
 
-                # 執行補資料（這裡簡化處理，實際應根據 market_id 取得交易所和符號）
-                # TODO: 實作更完善的補資料邏輯
-                since_ms = int(start_time.timestamp() * 1000)
+                # 從資料庫取得 market 資訊
+                market_info = self.db.get_market_info(market_id)
+                if not market_info:
+                    raise ValueError(f"Market ID {market_id} not found")
+                
+                exchange_name = market_info['exchange']
+                symbol = market_info['symbol']
+                
+                logger.info(f"Backfilling {exchange_name}/{symbol} {timeframe}")
 
-                # 暫時標記為完成
+                # 取得對應的連接器
+                connector = self.connectors.get(exchange_name)
+                if not connector:
+                    raise ValueError(f"Connector not found for {exchange_name}")
+
+                # 計算需要抓取的時間範圍
+                since_ms = int(start_time.timestamp() * 1000)
+                until_ms = int(end_time.timestamp() * 1000)
+                
+                # 批次抓取資料（避免一次抓太多）
+                total_records = 0
+                current_since = since_ms
+                
+                while current_since < until_ms:
+                    # 使用重試機制抓取資料
+                    retry_config = RetryConfig(max_retries=3, initial_delay=2, backoff_factor=2)
+                    
+                    @retry_with_backoff(
+                        config=retry_config,
+                        exchange_name=exchange_name,
+                        endpoint='fetch_ohlcv_backfill'
+                    )
+                    def fetch_batch():
+                        return connector.fetch_ohlcv(
+                            symbol=symbol,
+                            timeframe=timeframe,
+                            since=current_since,
+                            limit=1000
+                        )
+                    
+                    ohlcv_batch = fetch_batch()
+                    
+                    if not ohlcv_batch:
+                        logger.warning(f"No data returned for {current_since}")
+                        break
+                    
+                    # 寫入資料庫
+                    count = self.db.insert_ohlcv_batch(market_id, timeframe, ohlcv_batch)
+                    total_records += count
+                    
+                    # 更新下次抓取的起始時間
+                    last_timestamp = ohlcv_batch[-1][0]
+                    current_since = last_timestamp + 1
+                    
+                    # 避免超過結束時間
+                    if last_timestamp >= until_ms:
+                        break
+                    
+                    logger.debug(f"Backfilled {count} records, total: {total_records}")
+
+                # 更新任務狀態為完成
                 self.backfill_scheduler.update_task_status(
-                    task_id, 'completed', actual_records=0
+                    task_id, 'completed', actual_records=total_records
                 )
 
                 # 記錄補資料完成
                 self.metrics.record_backfill_completion(status='success')
 
-                logger.success(f"Backfill task #{task_id} completed")
+                logger.success(
+                    f"Backfill task #{task_id} completed: "
+                    f"{total_records} records inserted"
+                )
 
             except Exception as e:
                 logger.error(f"Backfill task #{task_id} failed: {e}")
@@ -409,6 +589,21 @@ class ConfigDrivenCollector:
                 self.metrics.record_backfill_completion(status='failed')
 
         logger.info("=" * 80 + "\n")
+
+    def run_retention_check_cycle(self):
+        """執行資料保留監控循環"""
+        try:
+            logger.info("=" * 80)
+            logger.info("Retention policy check cycle started")
+            logger.info("=" * 80)
+
+            self.retention_monitor.check_all()
+
+            logger.info("Retention policy check completed")
+            logger.info("=" * 80 + "\n")
+
+        except Exception as e:
+            logger.error(f"Retention policy check failed: {e}", exc_info=True)
 
     def monitor_db_connections(self):
         """監控資料庫連接並清理殭屍連接"""
@@ -495,11 +690,39 @@ class ConfigDrivenCollector:
             id='db_connection_monitor'
         )
 
+        # 資料保留策略監控（每 5 分鐘）
+        scheduler.add_job(
+            self.run_retention_check_cycle,
+            'interval',
+            minutes=5,
+            id='retention_policy_check'
+        )
+
+        # 資金費率收集（每 8 小時，與交易所結算時間對齊：00:00, 08:00, 16:00 UTC）
+        scheduler.add_job(
+            self.run_funding_rate_collection,
+            'cron',
+            hour='0,8,16',
+            minute=5,
+            id='funding_rate_collection'
+        )
+
+        # 未平倉量收集（每 5 分鐘）
+        scheduler.add_job(
+            self.run_open_interest_collection,
+            'interval',
+            minutes=5,
+            id='open_interest_collection'
+        )
+
         logger.info("Scheduler started with following jobs:")
         logger.info(f"  - collect_crypto_data: every {settings.collector_interval_seconds}s")
         logger.info("  - quality_check: every 10 minutes")
         logger.info("  - backfill_tasks: every 5 minutes")
         logger.info("  - db_connection_monitor: every 15 minutes")
+        logger.info("  - retention_policy_check: every 5 minutes")
+        logger.info("  - funding_rate_collection: at 00:05, 08:05, 16:05 UTC")
+        logger.info("  - open_interest_collection: every 5 minutes")
         logger.info("Press Ctrl+C to exit")
 
         try:
@@ -516,6 +739,7 @@ class ConfigDrivenCollector:
         self.db.close()
         self.backfill_scheduler.close()
         self.quality_checker.close()
+        self.retention_monitor.disconnect()
         logger.info("Resources cleaned up")
 
 
@@ -525,6 +749,10 @@ def main():
 
     # 先執行一次資料收集
     collector.run_collection_cycle()
+    
+    # 執行一次衍生品收集
+    collector.run_open_interest_collection()
+    collector.run_funding_rate_collection()
 
     # 啟動定時任務
     collector.start_scheduler()

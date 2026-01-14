@@ -40,9 +40,8 @@ class DataQualityChecker:
         """
         self.db = db_loader or DatabaseLoader()
         self.validator = validator or DataValidator()
-        self.backfill_scheduler = backfill_scheduler or BackfillScheduler(
-            db_conn=self.db.conn
-        )
+        # BackfillScheduler 會建立自己的連接
+        self.backfill_scheduler = backfill_scheduler or BackfillScheduler()
 
         logger.info("DataQualityChecker initialized")
 
@@ -71,7 +70,8 @@ class DataQualityChecker:
         )
 
         # 確定檢查時間範圍
-        end_time = datetime.now(timezone.utc)
+        check_time = datetime.now(timezone.utc)
+        end_time = check_time
         start_time = end_time - timedelta(hours=lookback_hours)
 
         # 串流驗證以降低記憶體使用
@@ -82,8 +82,58 @@ class DataQualityChecker:
             row_iter, timeframe, check_missing_intervals=False
         )
 
-        if validation_result.get('total_records', 0) == 0:
-            logger.warning(f"No OHLCV data found for quality check")
+        actual_count = validation_result.get('total_records', 0)
+        
+        # 計算預期記錄數（無論是否有資料都要計算）
+        expected_count = self._calculate_expected_count(
+            start_time, end_time, timeframe
+        )
+        
+        if actual_count == 0:
+            logger.warning(
+                f"No OHLCV data found for quality check "
+                f"(expected {expected_count} records)"
+            )
+            
+            # 當沒有資料時，自動建立補資料任務
+            backfill_created = False
+            if expected_count > 0:
+                try:
+                    task_id = self.backfill_scheduler.create_backfill_task(
+                        market_id=market_id,
+                        data_type='ohlcv',
+                        timeframe=timeframe,
+                        start_time=start_time,
+                        end_time=end_time,
+                        priority=2,  # 高優先級
+                        expected_records=expected_count
+                    )
+                    backfill_created = True
+                    logger.info(
+                        f"Created backfill task (task_id={task_id}) for "
+                        f"market_id={market_id}, timeframe={timeframe}, "
+                        f"range: {start_time} to {end_time}"
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to create backfill task: {e}")
+            
+            # 寫入品質指標（無資料情況）
+            self.db.insert_quality_metrics(
+                market_id=market_id,
+                timeframe=timeframe,
+                check_time=check_time,
+                start_time=start_time,
+                end_time=end_time,
+                expected_count=expected_count,
+                actual_count=0,
+                missing_count=expected_count,
+                missing_rate=1.0,  # 100% 缺失
+                issues=[{
+                    'type': 'no_data',
+                    'message': f'No data in time range (expected {expected_count} records)'
+                }],
+                backfill_task_created=backfill_created
+            )
             return {
                 'market_id': market_id,
                 'timeframe': timeframe,
@@ -93,9 +143,12 @@ class DataQualityChecker:
                 'warnings': []
             }
 
+        # 檢查缺失區間
         missing_intervals = self._fetch_missing_intervals_sql(
             market_id, timeframe, start_time, end_time
         )
+        
+        missing_count = 0
         if missing_intervals:
             warnings = validation_result.get('warnings', [])
             warnings.append({
@@ -104,27 +157,82 @@ class DataQualityChecker:
                 'details': missing_intervals[:10]
             })
             validation_result['warnings'] = warnings
+            
+            # 計算總缺失數
+            missing_count = sum(gap['missing_count'] for gap in missing_intervals)
 
-        # 記錄品質摘要到資料庫
-        self.db.insert_quality_summary(
-            market_id=market_id,
-            data_type='ohlcv',
-            timeframe=timeframe,
-            time_range_start=start_time,
-            time_range_end=end_time,
-            total_records=len(ohlcv_data),
-            validation_result=validation_result
-        )
+        # 計算缺失率
+        missing_rate = missing_count / expected_count if expected_count > 0 else 0.0
 
-        # 如果需要，建立補資料任務
-        if create_backfill_tasks:
+        # 統計其他錯誤類型
+        duplicate_count = 0
+        timestamp_error_count = 0
+        issues = []
+
+        for error in validation_result.get('errors', []):
+            if error['type'] == 'out_of_order_timestamp':
+                timestamp_error_count = error.get('count', 1)
+                issues.append({
+                    'type': 'timestamp_order',
+                    'severity': 'error',
+                    'count': timestamp_error_count,
+                    'message': error.get('message', 'Timestamps not in order')
+                })
+
+        for warning in validation_result.get('warnings', []):
+            if warning['type'] == 'missing_interval':
+                for gap in warning.get('details', [])[:5]:  # 只記錄前5個
+                    issues.append({
+                        'type': 'missing_data',
+                        'severity': 'warning',
+                        'start_time': gap['start_time'].isoformat() if isinstance(gap['start_time'], datetime) else str(gap['start_time']),
+                        'end_time': gap['end_time'].isoformat() if isinstance(gap['end_time'], datetime) else str(gap['end_time']),
+                        'missing_count': gap['missing_count']
+                    })
+            elif warning['type'] == 'price_jump':
+                issues.append({
+                    'type': 'price_anomaly',
+                    'severity': 'warning',
+                    'count': warning.get('count', 1),
+                    'message': 'Abnormal price jumps detected'
+                })
+            elif warning['type'] == 'volume_spike':
+                issues.append({
+                    'type': 'volume_anomaly',
+                    'severity': 'warning',
+                    'count': warning.get('count', 1),
+                    'message': 'Abnormal volume spikes detected'
+                })
+
+        # 決定是否建立補資料任務（當缺失率超過 0.1% 時）
+        should_create_backfill = create_backfill_tasks and missing_rate > 0.001
+        
+        if should_create_backfill:
             self._create_backfill_tasks_from_validation(
                 market_id, timeframe, validation_result
             )
 
+        # 寫入新的品質指標表
+        self.db.insert_quality_metrics(
+            market_id=market_id,
+            timeframe=timeframe,
+            check_time=check_time,
+            start_time=start_time,
+            end_time=end_time,
+            expected_count=expected_count,
+            actual_count=actual_count,
+            missing_count=missing_count,
+            missing_rate=missing_rate,
+            duplicate_count=duplicate_count,
+            timestamp_error_count=timestamp_error_count,
+            issues=issues,
+            backfill_task_created=should_create_backfill
+        )
+
         logger.info(
             f"Quality check completed: "
-            f"records={validation_result['total_records']}, "
+            f"records={actual_count}/{expected_count}, "
+            f"missing_rate={missing_rate*100:.2f}%, "
             f"valid={validation_result['valid']}, "
             f"errors={len(validation_result['errors'])}, "
             f"warnings={len(validation_result['warnings'])}"
@@ -199,22 +307,23 @@ class DataQualityChecker:
         Returns:
             OHLCV 資料列表 [[timestamp_ms, open, high, low, close, volume], ...]
         """
-        with self.db.conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                    EXTRACT(EPOCH FROM open_time) * 1000,
-                    open, high, low, close, volume
-                FROM ohlcv
-                WHERE market_id = %s
-                  AND timeframe = %s
-                  AND open_time >= %s
-                  AND open_time < %s
-                ORDER BY open_time ASC
-                """,
-                (market_id, timeframe, start_time, end_time)
-            )
-            rows = cur.fetchall()
+        with self.db.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        EXTRACT(EPOCH FROM open_time) * 1000,
+                        open, high, low, close, volume
+                    FROM ohlcv
+                    WHERE market_id = %s
+                      AND timeframe = %s
+                      AND open_time >= %s
+                      AND open_time < %s
+                    ORDER BY open_time ASC
+                    """,
+                    (market_id, timeframe, start_time, end_time)
+                )
+                rows = cur.fetchall()
 
         return [list(row) for row in rows]
 
@@ -262,12 +371,13 @@ class DataQualityChecker:
             ORDER BY start_time
         """
 
-        with self.db.conn.cursor() as cur:
-            cur.execute(
-                query,
-                (market_id, timeframe, start_time, end_time)
-            )
-            rows = cur.fetchall()
+        with self.db.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    query,
+                    (market_id, timeframe, start_time, end_time)
+                )
+                rows = cur.fetchall()
 
         return [
             {
@@ -292,24 +402,26 @@ class DataQualityChecker:
         Returns:
             iterator yielding [timestamp_ms, open, high, low, close, volume]
         """
-        with self.db.conn.cursor(name='ohlcv_stream') as cur:
-            cur.itersize = 10000
-            cur.execute(
-                """
-                SELECT
-                    EXTRACT(EPOCH FROM open_time) * 1000,
-                    open, high, low, close, volume
-                FROM ohlcv
-                WHERE market_id = %s
-                  AND timeframe = %s
-                  AND open_time >= %s
-                  AND open_time < %s
-                ORDER BY open_time ASC
-                """,
-                (market_id, timeframe, start_time, end_time)
-            )
-            for row in cur:
-                yield list(row)
+        with self.db.get_connection() as conn:
+            with conn.cursor(name='ohlcv_stream') as cur:
+                cur.itersize = 10000
+                cur.execute(
+                    """
+                    SELECT
+                        EXTRACT(EPOCH FROM open_time) * 1000,
+                        open, high, low, close, volume
+                    FROM ohlcv
+                    WHERE market_id = %s
+                      AND timeframe = %s
+                      AND open_time >= %s
+                      AND open_time < %s
+                    ORDER BY open_time ASC
+                    """,
+                    (market_id, timeframe, start_time, end_time)
+                )
+                for row in cur:
+                    # 轉換 Decimal timestamp 為 int
+                    yield [int(row[0]), float(row[1]), float(row[2]), float(row[3]), float(row[4]), float(row[5])]
 
     def _get_active_markets(self) -> List[Dict]:
         """
@@ -318,22 +430,59 @@ class DataQualityChecker:
         Returns:
             市場列表 [{'id': int, 'symbol': str, 'exchange': str}, ...]
         """
-        with self.db.conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT m.id, m.symbol, e.name AS exchange
-                FROM markets m
-                JOIN exchanges e ON m.exchange_id = e.id
-                WHERE m.is_active = TRUE
-                ORDER BY m.id
-                """
-            )
-            rows = cur.fetchall()
+        with self.db.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT m.id, m.symbol, e.name AS exchange
+                    FROM markets m
+                    JOIN exchanges e ON m.exchange_id = e.id
+                    WHERE m.is_active = TRUE
+                    ORDER BY m.id
+                    """
+                )
+                rows = cur.fetchall()
 
         return [
             {'id': row[0], 'symbol': row[1], 'exchange': row[2]}
             for row in rows
         ]
+
+    def _calculate_expected_count(
+        self,
+        start_time: datetime,
+        end_time: datetime,
+        timeframe: str
+    ) -> int:
+        """
+        計算給定時間範圍內預期的 K 線數量
+
+        Args:
+            start_time: 起始時間
+            end_time: 結束時間
+            timeframe: 時間週期
+
+        Returns:
+            預期的 K 線數量
+        """
+        # 將 timeframe 轉換為秒數
+        interval_seconds = {
+            '1m': 60,
+            '5m': 300,
+            '15m': 900,
+            '30m': 1800,
+            '1h': 3600,
+            '4h': 14400,
+            '1d': 86400
+        }.get(timeframe, 60)
+
+        # 計算時間差（秒）
+        time_diff = (end_time - start_time).total_seconds()
+
+        # 計算預期數量（無條件進位）
+        expected = int(time_diff / interval_seconds)
+
+        return expected
 
     def _create_backfill_tasks_from_validation(
         self,
@@ -385,44 +534,45 @@ class DataQualityChecker:
         Returns:
             品質報告字典
         """
-        with self.db.conn.cursor() as cur:
-            if market_id:
-                cur.execute(
-                    """
-                    SELECT
-                        AVG(quality_score) AS avg_score,
-                        MIN(quality_score) AS min_score,
-                        MAX(quality_score) AS max_score,
-                        COUNT(*) AS total_checks,
-                        SUM(CASE WHEN is_valid = FALSE THEN 1 ELSE 0 END) AS failed_checks,
-                        SUM(missing_count) AS total_missing,
-                        SUM(out_of_order_count) AS total_out_of_order,
-                        SUM(price_jump_count) AS total_price_jumps
-                    FROM data_quality_summary
-                    WHERE market_id = %s
-                      AND check_time >= NOW() - INTERVAL '%s hours'
-                    """,
-                    (market_id, hours)
-                )
-            else:
-                cur.execute(
-                    """
-                    SELECT
-                        AVG(quality_score) AS avg_score,
-                        MIN(quality_score) AS min_score,
-                        MAX(quality_score) AS max_score,
-                        COUNT(*) AS total_checks,
-                        SUM(CASE WHEN is_valid = FALSE THEN 1 ELSE 0 END) AS failed_checks,
-                        SUM(missing_count) AS total_missing,
-                        SUM(out_of_order_count) AS total_out_of_order,
-                        SUM(price_jump_count) AS total_price_jumps
-                    FROM data_quality_summary
-                    WHERE check_time >= NOW() - INTERVAL '%s hours'
-                    """,
-                    (hours,)
-                )
+        with self.db.get_connection() as conn:
+            with conn.cursor() as cur:
+                if market_id:
+                    cur.execute(
+                        """
+                        SELECT
+                            AVG(quality_score) AS avg_score,
+                            MIN(quality_score) AS min_score,
+                            MAX(quality_score) AS max_score,
+                            COUNT(*) AS total_checks,
+                            SUM(CASE WHEN is_valid = FALSE THEN 1 ELSE 0 END) AS failed_checks,
+                            SUM(missing_count) AS total_missing,
+                            SUM(out_of_order_count) AS total_out_of_order,
+                            SUM(price_jump_count) AS total_price_jumps
+                        FROM data_quality_summary
+                        WHERE market_id = %s
+                          AND check_time >= NOW() - INTERVAL '%s hours'
+                        """,
+                        (market_id, hours)
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT
+                            AVG(quality_score) AS avg_score,
+                            MIN(quality_score) AS min_score,
+                            MAX(quality_score) AS max_score,
+                            COUNT(*) AS total_checks,
+                            SUM(CASE WHEN is_valid = FALSE THEN 1 ELSE 0 END) AS failed_checks,
+                            SUM(missing_count) AS total_missing,
+                            SUM(out_of_order_count) AS total_out_of_order,
+                            SUM(price_jump_count) AS total_price_jumps
+                        FROM data_quality_summary
+                        WHERE check_time >= NOW() - INTERVAL '%s hours'
+                        """,
+                        (hours,)
+                    )
 
-            row = cur.fetchone()
+                row = cur.fetchone()
 
         return {
             'market_id': market_id,

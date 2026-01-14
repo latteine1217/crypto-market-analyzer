@@ -10,8 +10,10 @@ import {
   MessageType,
   Trade,
   OrderBookSnapshot,
+  Kline,
   FlushConfig
 } from '../types';
+import { parseSymbol, normalizeSymbol } from '../utils/symbolUtils';
 
 export class DBFlusher {
   private pool: Pool;
@@ -92,9 +94,12 @@ export class DBFlusher {
       while (keepDraining && batches < maxBatchesPerFlush) {
         const tradesFlushed = await this.flushTrades();
         const orderbooksFlushed = await this.flushOrderBookSnapshots();
+        const klinesFlushed = await this.flushKlines();
 
         keepDraining =
-          tradesFlushed >= batchSize || orderbooksFlushed >= batchSize;
+          tradesFlushed >= batchSize || 
+          orderbooksFlushed >= batchSize ||
+          klinesFlushed >= batchSize;
         batches += 1;
       }
 
@@ -275,6 +280,113 @@ export class DBFlusher {
   }
 
   /**
+   * Flush K線資料
+   */
+  private async flushKlines(): Promise<number> {
+    const messages = await this.queue.pop(
+      MessageType.KLINE,
+      this.flushConfig.batchSize
+    );
+
+    if (messages.length === 0) {
+      return 0;
+    }
+
+    log.debug(`Flushing ${messages.length} klines`);
+
+    const client = await this.pool.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      const rows: Array<[
+        number, string, number, number, number, number, number, 
+        number, number | null, number | null
+      ]> = [];
+
+      for (const msg of messages) {
+        const kline = msg.data as Kline;
+
+        // 只寫入已完結的 K線（避免重複更新）
+        if (!kline.isClosed) {
+          continue;
+        }
+
+        const marketId = await this.getOrCreateMarketId(
+          client,
+          msg.exchange,
+          kline.symbol
+        );
+
+        rows.push([
+          marketId,
+          kline.interval,           // timeframe (1m, 5m, 1h, etc.)
+          kline.openTime,           // open_time
+          kline.open,
+          kline.high,
+          kline.low,
+          kline.close,
+          kline.volume,
+          kline.quoteVolume || null,
+          kline.trades || null
+        ]);
+      }
+
+      if (rows.length === 0) {
+        await client.query('COMMIT');
+        return 0;
+      }
+
+      const values = rows
+        .map(
+          (_, i) =>
+            `($${i * 10 + 1}, $${i * 10 + 2}, to_timestamp($${i * 10 + 3} / 1000.0), ` +
+            `$${i * 10 + 4}, $${i * 10 + 5}, $${i * 10 + 6}, $${i * 10 + 7}, ` +
+            `$${i * 10 + 8}, $${i * 10 + 9}, $${i * 10 + 10})`
+        )
+        .join(', ');
+
+      await client.query(
+        `
+        INSERT INTO ohlcv (
+          market_id, timeframe, open_time,
+          open, high, low, close, volume,
+          quote_volume, trade_count
+        )
+        VALUES ${values}
+        ON CONFLICT (market_id, timeframe, open_time) 
+        DO UPDATE SET
+          open = EXCLUDED.open,
+          high = EXCLUDED.high,
+          low = EXCLUDED.low,
+          close = EXCLUDED.close,
+          volume = EXCLUDED.volume,
+          quote_volume = EXCLUDED.quote_volume,
+          trade_count = EXCLUDED.trade_count
+        `,
+        rows.flat()
+      );
+
+      await client.query('COMMIT');
+
+      this.stats.totalFlushed += rows.length;
+      log.info(`Flushed ${rows.length} klines (${messages.length - rows.length} skipped as not closed)`);
+
+      return rows.length;
+
+    } catch (error) {
+      await client.query('ROLLBACK');
+      log.error('Failed to flush klines', error);
+
+      await this.queue.pushBatch(messages);
+      throw error;
+
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
    * 取得或建立 market_id
    */
   private async getOrCreateMarketId(
@@ -310,14 +422,23 @@ export class DBFlusher {
     }
 
     // 取得或建立 market
-    const [base, quote] = symbol.replace('/', '').match(/.{1,4}/g) || ['', ''];
+    let base: string, quote: string;
+    try {
+      [base, quote] = parseSymbol(symbol);
+    } catch (error) {
+      log.error(`Failed to parse symbol: ${symbol}`, error);
+      throw error;
+    }
+
+    // 標準化 symbol 為交易所原生格式 (無斜線)
+    const normalizedSymbol = normalizeSymbol(symbol);
 
     result = await client.query(
       `INSERT INTO markets (exchange_id, symbol, base_asset, quote_asset)
        VALUES ($1, $2, $3, $4)
        ON CONFLICT (exchange_id, symbol) DO UPDATE SET symbol = EXCLUDED.symbol
        RETURNING id`,
-      [exchangeId, symbol, base || symbol.slice(0, -4), quote || 'USDT']
+      [exchangeId, normalizedSymbol, base, quote]
     );
 
     const marketId = result.rows[0].id;

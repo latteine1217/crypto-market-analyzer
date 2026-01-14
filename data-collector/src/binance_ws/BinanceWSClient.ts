@@ -9,6 +9,7 @@ import {
   ConnectionState,
   Trade,
   OrderBookUpdate,
+  Kline,
   MessageType,
   QueueMessage,
   WSConfig,
@@ -243,10 +244,34 @@ export class BinanceWSClient extends EventEmitter {
   /**
    * 處理 K線訊息
    */
-  private handleKlineMessage(_data: any): void {
-    // K線數據處理（可選）
-    // 暫時先略過，focus 在 trade 和 depth
+  private handleKlineMessage(data: any): void {
+    // Binance K線數據格式: data.k 包含 K線資訊
+    const k = data.k;
+    
+    const kline: Kline = {
+      symbol: data.s,
+      interval: k.i,          // K線週期 (1m, 5m, 1h, etc.)
+      openTime: k.t,          // K線開始時間
+      closeTime: k.T,         // K線結束時間
+      open: parseFloat(k.o),
+      high: parseFloat(k.h),
+      low: parseFloat(k.l),
+      close: parseFloat(k.c),
+      volume: parseFloat(k.v),        // 成交量
+      quoteVolume: parseFloat(k.q),   // 成交額
+      trades: k.n,                     // 成交筆數
+      isClosed: k.x                    // K線是否完結
+    };
+
+    const message: QueueMessage = {
+      type: MessageType.KLINE,
+      exchange: 'binance',
+      data: kline,
+      receivedAt: Date.now()
+    };
+
     this.updateStats(MessageType.KLINE);
+    this.emit('message', message);
   }
 
   /**

@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """
 長期運行測試監控腳本
-定期收集系統狀態、資源使用、資料品質指標
+持續監控系統資源、資料庫狀態、服務健康度
 """
-
-import os
-import sys
 import json
 import time
-import psutil
+import sys
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Dict, List, Optional
+from loguru import logger
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
@@ -286,15 +285,16 @@ def generate_summary(test_id):
     cpu_usage = [m['system_resources']['cpu']['percent_avg'] for m in metrics_list]
     mem_usage = [m['system_resources']['memory']['percent'] for m in metrics_list]
     disk_usage = [m['system_resources']['disk']['percent'] for m in metrics_list]
+    
+    # 取得時間範圍
+    start_time = datetime.fromisoformat(metrics_list[0]['timestamp'])
+    end_time = datetime.fromisoformat(metrics_list[-1]['timestamp'])
 
     summary = {
         "test_id": test_id,
         "start_time": metrics_list[0]['timestamp'],
         "end_time": metrics_list[-1]['timestamp'],
-        "duration_hours": (
-            datetime.fromisoformat(metrics_list[-1]['timestamp']) -
-            datetime.fromisoformat(metrics_list[0]['timestamp'])
-        ).total_seconds() / 3600,
+        "duration_hours": (end_time - start_time).total_seconds() / 3600,
         "data_points": len(metrics_list),
         "resource_stats": {
             "cpu_percent": {
@@ -313,8 +313,8 @@ def generate_summary(test_id):
                 "avg": sum(disk_usage) / len(disk_usage)
             }
         },
-        "container_restarts": [],  # TODO: 分析容器重啟
-        "errors": []  # TODO: 從日誌提取錯誤
+        "container_restarts": analyze_container_restarts(test_id, start_time, end_time),
+        "errors": analyze_error_logs(test_id, start_time, end_time)
     }
 
     summary_file = OUTPUT_DIR / test_id / "summary.json"
@@ -322,6 +322,95 @@ def generate_summary(test_id):
         json.dump(summary, f, indent=2)
 
     return summary
+
+
+def analyze_container_restarts(test_id: str, start_time: datetime, end_time: datetime) -> List[Dict]:
+    """
+    分析容器重啟記錄
+    
+    Args:
+        test_id: 測試 ID
+        start_time: 測試開始時間
+        end_time: 測試結束時間
+        
+    Returns:
+        容器重啟記錄列表
+    """
+    restarts = []
+    
+    try:
+        # 從 Docker 獲取容器重啟計數
+        result = subprocess.run(
+            ["docker-compose", "ps", "--format", "json"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        
+        import json
+        containers = [json.loads(line) for line in result.stdout.strip().split('\n') if line]
+        
+        for container in containers:
+            service = container.get('Service', 'unknown')
+            # 檢查重啟次數（從 Status 解析，例如 "Up 5 minutes (healthy, restarted 2 times)"）
+            status = container.get('Status', '')
+            
+            # 簡單解析重啟信息
+            if 'restart' in status.lower():
+                restarts.append({
+                    'service': service,
+                    'status': status,
+                    'timestamp': datetime.now().isoformat()
+                })
+        
+        logger.info(f"Found {len(restarts)} container restarts")
+        
+    except Exception as e:
+        logger.error(f"Failed to analyze container restarts: {e}")
+    
+    return restarts
+
+
+def analyze_error_logs(test_id: str, start_time: datetime, end_time: datetime) -> List[Dict]:
+    """
+    從日誌提取錯誤資訊
+    
+    Args:
+        test_id: 測試 ID
+        start_time: 測試開始時間
+        end_time: 測試結束時間
+        
+    Returns:
+        錯誤記錄列表
+    """
+    errors = []
+    services = ['collector', 'ws-collector', 'dashboard']
+    
+    try:
+        for service in services:
+            # 從 Docker logs 提取錯誤
+            result = subprocess.run(
+                ["docker-compose", "logs", "--tail=200", service],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            
+            # 解析錯誤日誌（搜尋 ERROR, CRITICAL, Exception 等關鍵字）
+            for line in result.stdout.split('\n'):
+                if any(keyword in line for keyword in ['ERROR', 'CRITICAL', 'Exception', 'Failed']):
+                    errors.append({
+                        'service': service,
+                        'message': line.strip()[:200],  # 限制長度
+                        'timestamp': datetime.now().isoformat()
+                    })
+        
+        logger.info(f"Found {len(errors)} error log entries")
+        
+    except Exception as e:
+        logger.error(f"Failed to analyze error logs: {e}")
+    
+    return errors[:50]  # 限制最多 50 條錯誤
 
 
 def main():

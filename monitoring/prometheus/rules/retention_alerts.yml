@@ -6,20 +6,33 @@ groups:
     rules:
       # ========== 連續聚合告警 ==========
       
-      # Alert 1: 連續聚合視圖超過 2 小時未更新
+      # Alert 1: 連續聚合視圖資料過時（根據 end_offset 動態判斷）
+      # 註：不同視圖有不同的 end_offset（5m-2h），資料延遲應在合理範圍內
       - alert: ContinuousAggregateStale
         expr: |
-          (time() - timescaledb_continuous_aggregate_last_update_timestamp) > 7200
+          (
+            # ohlcv_5m: end_offset 5m，容忍延遲 2h
+            (time() - timescaledb_continuous_aggregate_newest_data_timestamp{view_name="ohlcv_5m"}) > 7200
+          ) or (
+            # ohlcv_15m: end_offset 15m，容忍延遲 2h
+            (time() - timescaledb_continuous_aggregate_newest_data_timestamp{view_name="ohlcv_15m"}) > 7200
+          ) or (
+            # ohlcv_1h: end_offset 1h，容忍延遲 6h
+            (time() - timescaledb_continuous_aggregate_newest_data_timestamp{view_name="ohlcv_1h"}) > 21600
+          ) or (
+            # ohlcv_1d: end_offset 2h，容忍延遲 2 天
+            (time() - timescaledb_continuous_aggregate_newest_data_timestamp{view_name="ohlcv_1d"}) > 172800
+          )
         for: 10m
         labels:
           severity: warning
           component: timescaledb
           category: continuous_aggregate
         annotations:
-          summary: "連續聚合視圖 {{ $labels.view_name }} 超過 2 小時未更新"
+          summary: "連續聚合視圖 {{ $labels.view_name }} 資料過時"
           description: |
-            視圖 {{ $labels.view_name }} 最後更新時間：{{ $value | humanizeDuration }} 前
-            這可能表示聚合 job 執行失敗或資料收集中斷
+            視圖 {{ $labels.view_name }} 最新資料時間：{{ $value | humanizeDuration }} 前
+            這可能表示資料收集中斷或源資料不足
       
       # Alert 2: 連續聚合視圖記錄數異常少
       - alert: ContinuousAggregateRecordCountLow
@@ -38,10 +51,23 @@ groups:
             視圖 {{ $labels.view_name }} 只有 {{ $value }} 筆記錄
             這可能表示資料收集問題或聚合配置錯誤
       
-      # Alert 3: 聚合視圖資料過時（最新資料超過 6 小時）
+      # Alert 3: 聚合視圖資料過時（根據視圖特性設定不同閾值）
+      # 註：與 Alert 1 類似，但使用 newest_data_timestamp 而非 last_update_timestamp
       - alert: ContinuousAggregateDataOutdated
         expr: |
-          (time() - timescaledb_continuous_aggregate_newest_data_timestamp) > 21600
+          (
+            # ohlcv_5m: 容忍 2小時 延遲
+            (time() - timescaledb_continuous_aggregate_newest_data_timestamp{view_name="ohlcv_5m"}) > 7200
+          ) or (
+            # ohlcv_15m: 容忍 2小時 延遲
+            (time() - timescaledb_continuous_aggregate_newest_data_timestamp{view_name="ohlcv_15m"}) > 7200
+          ) or (
+            # ohlcv_1h: 容忍 6小時 延遲
+            (time() - timescaledb_continuous_aggregate_newest_data_timestamp{view_name="ohlcv_1h"}) > 21600
+          ) or (
+            # ohlcv_1d: 容忍 2天 延遲
+            (time() - timescaledb_continuous_aggregate_newest_data_timestamp{view_name="ohlcv_1d"}) > 172800
+          )
         for: 15m
         labels:
           severity: warning
@@ -51,7 +77,7 @@ groups:
           summary: "連續聚合視圖 {{ $labels.view_name }} 資料過時"
           description: |
             視圖 {{ $labels.view_name }} 最新資料時間：{{ $value | humanizeDuration }} 前
-            資料收集可能已中斷
+            資料收集可能已中斷或聚合鏈上游資料不足
       
       # ========== TimescaleDB Jobs 告警 ==========
       
@@ -71,10 +97,11 @@ groups:
             Hypertable: {{ $labels.hypertable_name }}
             請檢查是否為預期行為
       
-      # Alert 5: TimescaleDB Job 超過 2 小時未執行
+      # Alert 5: TimescaleDB Job 逾期未執行（已超過下次排程時間 2 小時）
+      # 註：檢查 job 是否真的逾期，而非簡單比較最後執行時間
       - alert: TimescaleDBJobNotRunning
         expr: |
-          (time() - timescaledb_job_last_run_timestamp) > 7200
+          (time() - timescaledb_job_next_start_timestamp) > 7200
           and
           timescaledb_job_enabled == 1
         for: 10m
@@ -83,11 +110,12 @@ groups:
           component: timescaledb
           category: job
         annotations:
-          summary: "TimescaleDB Job {{ $labels.job_id }} 超過 2 小時未執行"
+          summary: "TimescaleDB Job {{ $labels.job_id }} 已逾期超過 2 小時未執行"
           description: |
-            Job {{ $labels.job_id }} ({{ $labels.job_type }}) 最後執行時間：{{ $value | humanizeDuration }} 前
+            Job {{ $labels.job_id }} ({{ $labels.job_type }}) 應執行時間：{{ $labels.next_start | humanizeTimestamp }}
+            目前已逾期：{{ $value | humanizeDuration }}
             Hypertable: {{ $labels.hypertable_name }}
-            Job 可能已失敗或排程異常
+            Job 可能已失敗或排程異常，請立即檢查！
       
       # Alert 6: TimescaleDB Job 最後執行失敗
       - alert: TimescaleDBJobLastRunFailed
@@ -168,12 +196,36 @@ groups:
             偏差：{{ $value }} 天
             ⚠️ 保留策略可能已失效，請立即檢查！
       
-      # Alert 10: 資料層記錄數異常少
+      # Alert 10: 資料層記錄數異常少（根據不同視圖設定合理閾值）
+      # 註：不同時間粒度的視圖有不同的合理記錄數範圍
       - alert: DataLayerRecordCountLow
         expr: |
-          timescaledb_data_total_records < 1000
-          and
-          timescaledb_data_total_records > 0
+          (
+            # ohlcv_5m: 5分鐘粒度，1天 = 288筆，合理最小值 100筆（約8小時）
+            timescaledb_data_total_records{layer="ohlcv_5m"} < 100
+            and
+            timescaledb_data_total_records{layer="ohlcv_5m"} > 0
+          ) or (
+            # ohlcv_15m: 15分鐘粒度，1天 = 96筆，合理最小值 50筆（約12小時）
+            timescaledb_data_total_records{layer="ohlcv_15m"} < 50
+            and
+            timescaledb_data_total_records{layer="ohlcv_15m"} > 0
+          ) or (
+            # ohlcv_1h: 1小時粒度，1天 = 24筆，合理最小值 24筆（1天）
+            timescaledb_data_total_records{layer="ohlcv_1h"} < 24
+            and
+            timescaledb_data_total_records{layer="ohlcv_1h"} > 0
+          ) or (
+            # ohlcv_1d: 日線粒度，合理最小值 3筆（3天）
+            timescaledb_data_total_records{layer="ohlcv_1d"} < 3
+            and
+            timescaledb_data_total_records{layer="ohlcv_1d"} > 0
+          ) or (
+            # raw_1m: 1分鐘原始資料，1天 = 1440筆，合理最小值 500筆（約8小時）
+            timescaledb_data_total_records{layer="raw_1m"} < 500
+            and
+            timescaledb_data_total_records{layer="raw_1m"} > 0
+          )
         for: 1h
         labels:
           severity: warning
@@ -185,6 +237,7 @@ groups:
             層級：{{ $labels.layer }}
             記錄數：{{ $value }}
             可能是資料收集問題或資料被過度清理
+            建議檢查資料收集狀態和保留策略配置
       
       # ========== 資料完整性告警 ==========
       
@@ -222,21 +275,25 @@ groups:
             大小：{{ $value }} bytes (> 50GB)
             建議檢查資料保留策略是否正常運行
       
-      # Alert 13: 索引空間使用量過大（超過表空間）
+      # Alert 13: 索引空間使用量過大（絕對大小超過 5GB）
+      # 註：TimescaleDB hypertable 主表的 table_size 為 0（資料存在 chunks），
+      #     因此只檢查索引絕對大小，並排除 hypertable 主表（table_size = 0）
       - alert: IndexSizeExcessive
         expr: |
-          timescaledb_index_size_bytes > timescaledb_table_size_bytes
+          timescaledb_index_size_bytes > 5 * 1024 * 1024 * 1024
+          and
+          timescaledb_table_size_bytes > 0
         for: 1h
         labels:
           severity: warning
           component: timescaledb
           category: storage
         annotations:
-          summary: "表 {{ $labels.table_name }} 索引空間超過表空間"
+          summary: "表 {{ $labels.table_name }} 索引空間使用量過大"
           description: |
             表：{{ $labels.table_name }}
-            索引大小：{{ $value }} bytes
-            可能需要重建索引或檢查索引配置
+            索引大小：{{ $value }} bytes (> 5GB)
+            建議檢查索引是否需要優化或重建
       
       # ========== 監控服務本身的告警 ==========
       
@@ -269,3 +326,54 @@ groups:
           description: |
             檢查執行時長：{{ $value }}秒
             可能表示資料庫負載過高或查詢效率問題
+      
+      # ========== 資料庫連接健康告警 (Migration 010) ==========
+      
+      # Alert 16: Idle in transaction 連接數過多
+      - alert: IdleInTransactionConnectionsHigh
+        expr: |
+          timescaledb_idle_in_transaction_connections > 5
+        for: 5m
+        labels:
+          severity: warning
+          component: timescaledb
+          category: connection
+        annotations:
+          summary: "Idle in transaction 連接數過多"
+          description: |
+            當前 idle in transaction 連接數：{{ $value }}
+            過多的 idle in transaction 連接可能阻塞 retention jobs
+            建議檢查應用程式連接管理邏輯
+      
+      # Alert 17: 長時間 idle in transaction 連接（超過 5 分鐘）
+      - alert: LongIdleInTransactionConnection
+        expr: |
+          timescaledb_idle_in_transaction_max_duration_seconds > 300
+        for: 2m
+        labels:
+          severity: warning
+          component: timescaledb
+          category: connection
+        annotations:
+          summary: "檢測到長時間 idle in transaction 連接"
+          description: |
+            最長 idle in transaction 持續時間：{{ $value | humanizeDuration }}
+            這可能阻塞 retention jobs 的執行
+            連接將在 10 分鐘時自動終止（idle_in_transaction_session_timeout）
+      
+      # Alert 18: 極長時間 idle in transaction 連接（超過 8 分鐘，接近超時）
+      - alert: CriticalIdleInTransactionConnection
+        expr: |
+          timescaledb_idle_in_transaction_max_duration_seconds > 480
+        for: 1m
+        labels:
+          severity: critical
+          component: timescaledb
+          category: connection
+        annotations:
+          summary: "檢測到極長時間 idle in transaction 連接 🚨"
+          description: |
+            最長 idle in transaction 持續時間：{{ $value | humanizeDuration }}
+            已接近 10 分鐘超時閾值，將自動終止
+            請檢查應用程式是否未正確提交/回滾事務
+

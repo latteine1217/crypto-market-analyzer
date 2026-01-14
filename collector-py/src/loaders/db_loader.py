@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from loguru import logger
 
 from config import settings
+from utils.symbol_utils import parse_symbol, normalize_symbol
 
 
 class DatabaseLoader:
@@ -147,6 +148,16 @@ class DatabaseLoader:
                     return None
                 exchange_id = row[0]
 
+                # 解析 symbol 為 base 和 quote asset
+                try:
+                    base_asset, quote_asset = parse_symbol(symbol)
+                except ValueError as e:
+                    logger.error(f"Failed to parse symbol: {e}")
+                    return None
+                
+                # 標準化 symbol 為交易所原生格式 (無斜線)
+                normalized_symbol = normalize_symbol(symbol)
+                
                 # 查詢或插入market
                 cur.execute(
                     """
@@ -155,7 +166,7 @@ class DatabaseLoader:
                     ON CONFLICT (exchange_id, symbol) DO NOTHING
                     RETURNING id
                     """,
-                    (exchange_id, symbol, symbol.split('/')[0], symbol.split('/')[1])
+                    (exchange_id, normalized_symbol, base_asset, quote_asset)
                 )
                 result = cur.fetchone()
                 if result:
@@ -164,12 +175,45 @@ class DatabaseLoader:
                     # 已存在，查詢id
                     cur.execute(
                         "SELECT id FROM markets WHERE exchange_id = %s AND symbol = %s",
-                        (exchange_id, symbol)
+                        (exchange_id, normalized_symbol)
                     )
                     market_id = cur.fetchone()[0]
 
                 conn.commit()
                 return market_id
+
+    def get_market_info(self, market_id: int) -> Optional[Dict]:
+        """
+        根據 market_id 取得市場資訊
+        
+        Args:
+            market_id: 市場ID
+            
+        Returns:
+            market 資訊字典 {'exchange': str, 'symbol': str, 'base_asset': str, 'quote_asset': str}
+            若不存在則返回 None
+        """
+        self.ensure_connection()
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT e.name as exchange, m.symbol, m.base_asset, m.quote_asset
+                    FROM markets m
+                    JOIN exchanges e ON m.exchange_id = e.id
+                    WHERE m.id = %s
+                    """,
+                    (market_id,)
+                )
+                row = cur.fetchone()
+                if row:
+                    return {
+                        'exchange': row[0],
+                        'symbol': row[1],
+                        'base_asset': row[2],
+                        'quote_asset': row[3]
+                    }
+                return None
 
     def insert_ohlcv_batch(
         self,
@@ -375,7 +419,7 @@ class DatabaseLoader:
         validation_result: Dict
     ) -> int:
         """
-        插入資料品質摘要
+        插入資料品質摘要（舊表，保持向後相容）
 
         Args:
             market_id: 市場ID
@@ -467,6 +511,335 @@ class DatabaseLoader:
             f"market_id={market_id}, score={quality_score:.2f}"
         )
         return summary_id
+
+    def insert_quality_metrics(
+        self,
+        market_id: int,
+        timeframe: str,
+        check_time: datetime,
+        start_time: datetime,
+        end_time: datetime,
+        expected_count: int,
+        actual_count: int,
+        missing_count: int,
+        missing_rate: float,
+        duplicate_count: int = 0,
+        timestamp_error_count: int = 0,
+        quality_score: Optional[float] = None,
+        status: Optional[str] = None,
+        issues: Optional[List[Dict]] = None,
+        backfill_task_created: bool = False
+    ) -> int:
+        """
+        插入資料品質指標（新表，用於量化驗收標準）
+
+        Args:
+            market_id: 市場ID
+            timeframe: 時間週期
+            check_time: 檢查時間
+            start_time: 資料起始時間
+            end_time: 資料結束時間
+            expected_count: 預期記錄數
+            actual_count: 實際記錄數
+            missing_count: 缺失記錄數
+            missing_rate: 缺失率（0-1）
+            duplicate_count: 重複記錄數
+            timestamp_error_count: 時間戳錯誤數
+            quality_score: 品質分數（0-100），若為None則自動計算
+            status: 品質狀態（excellent/good/acceptable/poor/critical），若為None則自動判定
+            issues: 問題列表（JSONB格式）
+            backfill_task_created: 是否已建立補資料任務
+
+        Returns:
+            插入的記錄ID
+        """
+        self.ensure_connection()
+        import json
+
+        # 計算率值
+        duplicate_rate = duplicate_count / actual_count if actual_count > 0 else 0
+        timestamp_error_rate = timestamp_error_count / actual_count if actual_count > 0 else 0
+
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                # 如果未提供 quality_score，使用 SQL 函數計算
+                if quality_score is None:
+                    cur.execute(
+                        "SELECT calculate_quality_score(%s, %s, %s)",
+                        (missing_rate, duplicate_rate, timestamp_error_rate)
+                    )
+                    quality_score = cur.fetchone()[0]
+
+                # 如果未提供 status，使用 SQL 函數判定
+                if status is None:
+                    cur.execute(
+                        "SELECT calculate_quality_status(%s)",
+                        (missing_rate,)
+                    )
+                    status = cur.fetchone()[0]
+
+            with conn.cursor() as cur:
+                # 插入指標
+                cur.execute(
+                    """
+                    INSERT INTO data_quality_metrics (
+                        market_id, timeframe, check_time,
+                        start_time, end_time,
+                        expected_count, actual_count, missing_count,
+                        missing_rate, duplicate_count, duplicate_rate, timestamp_error_rate,
+                        quality_score, status,
+                        issues, backfill_task_created
+                    )
+                    VALUES (
+                        %s, %s, %s,
+                        %s, %s,
+                        %s, %s, %s,
+                        %s, %s, %s, %s,
+                        %s, %s,
+                        %s, %s
+                    )
+                    RETURNING id
+                    """,
+                    (
+                        market_id, timeframe, check_time,
+                        start_time, end_time,
+                        expected_count, actual_count, missing_count,
+                        missing_rate, duplicate_count, duplicate_rate, timestamp_error_rate,
+                        quality_score, status,
+                        json.dumps(issues or []), backfill_task_created
+                    )
+                )
+                metrics_id = cur.fetchone()[0]
+                conn.commit()
+
+        logger.info(
+            f"Inserted quality metrics #{metrics_id}: "
+            f"market_id={market_id}, timeframe={timeframe}, "
+            f"missing_rate={missing_rate:.4f} ({missing_rate*100:.2f}%), "
+            f"score={quality_score:.2f}, status={status}"
+        )
+        return metrics_id
+
+    def insert_funding_rate(
+        self,
+        market_id: int,
+        funding_data: Dict
+    ) -> int:
+        """
+        插入單筆資金費率記錄
+
+        Args:
+            market_id: 市場ID
+            funding_data: {
+                'funding_rate': float,
+                'funding_rate_daily': float,
+                'funding_time': datetime,
+                'next_funding_time': datetime (optional),
+                'funding_interval': int (optional),
+                'mark_price': float (optional),
+                'index_price': float (optional)
+            }
+
+        Returns:
+            插入的記錄ID
+        """
+        self.ensure_connection()
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO funding_rates (
+                        market_id, funding_rate, funding_rate_daily,
+                        funding_time, next_funding_time, funding_interval,
+                        mark_price, index_price
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (market_id, funding_time) DO UPDATE SET
+                        funding_rate = EXCLUDED.funding_rate,
+                        funding_rate_daily = EXCLUDED.funding_rate_daily,
+                        next_funding_time = EXCLUDED.next_funding_time,
+                        funding_interval = EXCLUDED.funding_interval,
+                        mark_price = EXCLUDED.mark_price,
+                        index_price = EXCLUDED.index_price
+                    RETURNING id
+                    """,
+                    (
+                        market_id,
+                        funding_data['funding_rate'],
+                        funding_data.get('funding_rate_daily'),
+                        funding_data['funding_time'],
+                        funding_data.get('next_funding_time'),
+                        funding_data.get('funding_interval'),
+                        funding_data.get('mark_price'),
+                        funding_data.get('index_price')
+                    )
+                )
+                record_id = cur.fetchone()[0]
+                conn.commit()
+
+        logger.debug(f"Inserted funding rate #{record_id} for market_id={market_id}")
+        return record_id
+
+    def insert_funding_rate_batch(
+        self,
+        market_id: int,
+        funding_data_list: List[Dict]
+    ) -> int:
+        """
+        批次插入資金費率記錄
+
+        Args:
+            market_id: 市場ID
+            funding_data_list: List of funding_data dicts
+
+        Returns:
+            插入的行數
+        """
+        if not funding_data_list:
+            return 0
+
+        self.ensure_connection()
+        rows = []
+        for data in funding_data_list:
+            rows.append((
+                market_id,
+                data['funding_rate'],
+                data.get('funding_rate_daily'),
+                data['funding_time'],
+                data.get('next_funding_time'),
+                data.get('funding_interval'),
+                data.get('mark_price'),
+                data.get('index_price')
+            ))
+
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                execute_batch(
+                    cur,
+                    """
+                    INSERT INTO funding_rates (
+                        market_id, funding_rate, funding_rate_daily,
+                        funding_time, next_funding_time, funding_interval,
+                        mark_price, index_price
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (market_id, funding_time) DO UPDATE SET
+                        funding_rate = EXCLUDED.funding_rate,
+                        funding_rate_daily = EXCLUDED.funding_rate_daily,
+                        next_funding_time = EXCLUDED.next_funding_time,
+                        funding_interval = EXCLUDED.funding_interval,
+                        mark_price = EXCLUDED.mark_price,
+                        index_price = EXCLUDED.index_price
+                    """,
+                    rows,
+                    page_size=500
+                )
+                conn.commit()
+
+        logger.info(f"Inserted {len(rows)} funding rates for market_id={market_id}")
+        return len(rows)
+
+    def insert_open_interest(
+        self,
+        market_id: int,
+        oi_data: Dict
+    ) -> int:
+        """
+        插入單筆未平倉量記錄
+
+        Args:
+            market_id: 市場ID
+            oi_data: {
+                'open_interest': float,
+                'open_interest_usd': float (optional),
+                'timestamp': datetime,
+                'price': float (optional)
+            }
+
+        Returns:
+            插入的記錄ID
+        """
+        self.ensure_connection()
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO open_interest (
+                        market_id, open_interest, open_interest_usd,
+                        price, timestamp
+                    )
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (market_id, timestamp) DO UPDATE SET
+                        open_interest = EXCLUDED.open_interest,
+                        open_interest_usd = EXCLUDED.open_interest_usd,
+                        price = EXCLUDED.price
+                    RETURNING id
+                    """,
+                    (
+                        market_id,
+                        oi_data['open_interest'],
+                        oi_data.get('open_interest_usd'),
+                        oi_data.get('price'),
+                        oi_data['timestamp']
+                    )
+                )
+                record_id = cur.fetchone()[0]
+                conn.commit()
+
+        logger.debug(f"Inserted open interest #{record_id} for market_id={market_id}")
+        return record_id
+
+    def insert_open_interest_batch(
+        self,
+        market_id: int,
+        oi_data_list: List[Dict]
+    ) -> int:
+        """
+        批次插入未平倉量記錄
+
+        Args:
+            market_id: 市場ID
+            oi_data_list: List of oi_data dicts
+
+        Returns:
+            插入的行數
+        """
+        if not oi_data_list:
+            return 0
+
+        self.ensure_connection()
+        rows = []
+        for data in oi_data_list:
+            rows.append((
+                market_id,
+                data['open_interest'],
+                data.get('open_interest_usd'),
+                data.get('price'),
+                data['timestamp']
+            ))
+
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                execute_batch(
+                    cur,
+                    """
+                    INSERT INTO open_interest (
+                        market_id, open_interest, open_interest_usd,
+                        price, timestamp
+                    )
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (market_id, timestamp) DO UPDATE SET
+                        open_interest = EXCLUDED.open_interest,
+                        open_interest_usd = EXCLUDED.open_interest_usd,
+                        price = EXCLUDED.price
+                    """,
+                    rows,
+                    page_size=500
+                )
+                conn.commit()
+
+        logger.info(f"Inserted {len(rows)} open interest records for market_id={market_id}")
+        return len(rows)
 
     def close(self):
         """關閉連接池（通常不需要調用，除非程序退出）"""

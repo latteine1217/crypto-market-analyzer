@@ -16,15 +16,17 @@ route:
   group_wait: 10s
   group_interval: 10s
   repeat_interval: 12h
-  receiver: 'email-notifications'
+  receiver: 'email-notifications'  # Phase 7 Gate 3: 預設使用 email 驗證告警系統
 
   # 子路由（根據嚴重程度分類）
   routes:
+    # 嚴重告警 → email-critical
     - match:
         severity: critical
       receiver: 'email-critical'
       continue: false
 
+    # 警告級別 → email-warning
     - match:
         severity: warning
       receiver: 'email-warning'
@@ -90,6 +92,14 @@ receivers:
           <p><strong>時間：</strong>{{ .StartsAt }}</p>
           <hr>
           {{ end }}
+
+  # Webhook 接收器（備用 - 帶 K 線圖生成）
+  - name: 'webhook-with-charts'
+    webhook_configs:
+      - url: 'http://host.docker.internal:9100/webhook/alerts'
+        send_resolved: true
+        http_config:
+          follow_redirects: true
 
 # 抑制規則
 inhibit_rules:

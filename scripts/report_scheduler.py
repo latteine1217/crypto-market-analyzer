@@ -41,7 +41,15 @@ class ReportScheduler:
     def __init__(self):
         """初始化排程器"""
         self.tz = pytz.timezone(os.getenv('TZ', 'Asia/Taipei'))
-        self.scheduler = BlockingScheduler(timezone=self.tz)
+        self.misfire_grace_seconds = int(os.getenv('REPORT_MISFIRE_GRACE_SECONDS', 604800))
+        self.scheduler = BlockingScheduler(
+            timezone=self.tz,
+            job_defaults={
+                'coalesce': True,
+                'max_instances': 1,
+                'misfire_grace_time': self.misfire_grace_seconds
+            }
+        )
 
         # 資料庫配置
         self.db_config = {
@@ -70,6 +78,7 @@ class ReportScheduler:
         logger.info(f"時區：{self.tz}")
         logger.info(f"資料庫：{self.db_config['host']}:{self.db_config['port']}/{self.db_config['database']}")
         logger.info(f"輸出目錄：{self.output_dir}")
+        logger.info(f"Misfire 容忍時間：{self.misfire_grace_seconds} 秒")
 
     def send_email(self, subject: str, body: str, attachments: list = None):
         """發送郵件
@@ -149,31 +158,48 @@ class ReportScheduler:
 
             # 準備郵件
             subject = f"[Crypto Analyzer] 每日報表 - {datetime.now(self.tz).strftime('%Y-%m-%d')}"
-            body = f"""
-            <html>
-            <body>
-                <h2>每日報表</h2>
-                <p>報表期間：{result['period']['start']} ~ {result['period']['end']}</p>
-                <h3>資料品質</h3>
-                <ul>
-                    <li>品質記錄數：{result['statistics']['quality_records']}</li>
-                </ul>
-                <h3>策略表現</h3>
-                <ul>
-                    <li>回測策略數：{result['statistics']['strategies']}</li>
-                </ul>
-                <p>詳細報表請見附件</p>
-            </body>
-            </html>
-            """
-
-            # 發送郵件（附上 PDF）
+            
+            # 檢查是否有 PDF 或 HTML 報表
             pdf_path = result['output_paths'].get('pdf')
-            self.send_email(
-                subject=subject,
-                body=body,
-                attachments=[pdf_path] if pdf_path else None
-            )
+            html_overview_path = result['output_paths'].get('html_overview')
+            
+            if pdf_path:
+                # 如果有 PDF，郵件正文為摘要，附件為 PDF
+                body = f"""
+                <html>
+                <body>
+                    <h2>每日報表</h2>
+                    <p>報表期間：{result['period']['start']} ~ {result['period']['end']}</p>
+                    <h3>資料品質</h3>
+                    <ul>
+                        <li>品質記錄數：{result['statistics']['quality_records']}</li>
+                    </ul>
+                    <h3>策略表現</h3>
+                    <ul>
+                        <li>回測策略數：{result['statistics']['strategies']}</li>
+                    </ul>
+                    <p>詳細報表請見附件 PDF</p>
+                </body>
+                </html>
+                """
+                logger.info(f"將附加 PDF 報表：{pdf_path}")
+                self.send_email(
+                    subject=subject,
+                    body=body,
+                    attachments=[pdf_path]
+                )
+            elif html_overview_path:
+                # 如果沒有 PDF，將完整 HTML 報表嵌入郵件正文
+                with open(html_overview_path, 'r', encoding='utf-8') as f:
+                    body = f.read()
+                logger.info(f"將完整 HTML 報表嵌入郵件正文：{html_overview_path}")
+                self.send_email(
+                    subject=subject,
+                    body=body,
+                    attachments=None
+                )
+            else:
+                logger.warning("無可用的報表文件，跳過郵件發送")
 
             agent.close()
             logger.info("每日報表流程完成")
@@ -209,27 +235,44 @@ class ReportScheduler:
 
             # 準備郵件
             subject = f"[Crypto Analyzer] 每週報表 - Week {datetime.now(self.tz).isocalendar()[1]}"
-            body = f"""
-            <html>
-            <body>
-                <h2>每週報表</h2>
-                <p>報表期間：{result['period']['start']} ~ {result['period']['end']}</p>
-                <h3>資料品質趨勢</h3>
-                <p>週品質記錄數：{result['statistics']['quality_records']}</p>
-                <h3>策略排行</h3>
-                <p>回測策略數：{result['statistics']['strategies']}</p>
-                <p>詳細報表請見附件</p>
-            </body>
-            </html>
-            """
-
-            # 發送郵件
+            
+            # 檢查是否有 PDF 或 HTML 報表
             pdf_path = result['output_paths'].get('pdf')
-            self.send_email(
-                subject=subject,
-                body=body,
-                attachments=[pdf_path] if pdf_path else None
-            )
+            html_overview_path = result['output_paths'].get('html_overview')
+            
+            if pdf_path:
+                # 如果有 PDF，郵件正文為摘要，附件為 PDF
+                body = f"""
+                <html>
+                <body>
+                    <h2>每週報表</h2>
+                    <p>報表期間：{result['period']['start']} ~ {result['period']['end']}</p>
+                    <h3>資料品質趨勢</h3>
+                    <p>週品質記錄數：{result['statistics']['quality_records']}</p>
+                    <h3>策略排行</h3>
+                    <p>回測策略數：{result['statistics']['strategies']}</p>
+                    <p>詳細報表請見附件 PDF</p>
+                </body>
+                </html>
+                """
+                logger.info(f"將附加 PDF 報表：{pdf_path}")
+                self.send_email(
+                    subject=subject,
+                    body=body,
+                    attachments=[pdf_path]
+                )
+            elif html_overview_path:
+                # 如果沒有 PDF，將完整 HTML 報表嵌入郵件正文
+                with open(html_overview_path, 'r', encoding='utf-8') as f:
+                    body = f.read()
+                logger.info(f"將完整 HTML 報表嵌入郵件正文：{html_overview_path}")
+                self.send_email(
+                    subject=subject,
+                    body=body,
+                    attachments=None
+                )
+            else:
+                logger.warning("無可用的報表文件，跳過郵件發送")
 
             agent.close()
             logger.info("每週報表流程完成")

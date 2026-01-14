@@ -163,6 +163,19 @@ class RetentionMonitorMetrics:
             'Duration of retention check in seconds'
         )
         
+        # ========== 資料庫連接健康指標 (Migration 010) ==========
+        # Idle in transaction 連接數
+        self.idle_in_transaction_connections = Gauge(
+            'timescaledb_idle_in_transaction_connections',
+            'Number of connections in idle in transaction state'
+        )
+        
+        # Idle in transaction 最長持續時間（秒）
+        self.idle_in_transaction_max_duration_seconds = Gauge(
+            'timescaledb_idle_in_transaction_max_duration_seconds',
+            'Maximum duration of idle in transaction connections in seconds'
+        )
+        
         # 初始化監控資訊
         self.retention_monitor_info.info({
             'version': '1.0.0',
@@ -248,6 +261,9 @@ class RetentionMonitor:
             
             # 5. 檢查資料完整性
             self.check_data_integrity()
+            
+            # 6. 檢查資料庫連接健康（Migration 010）
+            self.check_database_connection_health()
             
             # 更新檢查時間和執行時長
             duration = (datetime.now() - start_time).total_seconds()
@@ -543,6 +559,59 @@ class RetentionMonitor:
         
         except Exception as e:
             logger.error(f"Error checking data integrity: {e}")
+    
+    def check_database_connection_health(self):
+        """
+        檢查資料庫連接健康狀態（Migration 010）
+        監控 idle in transaction 連接數，防止阻塞 retention jobs
+        """
+        logger.info("Checking database connection health")
+        
+        try:
+            query = """
+            SELECT 
+                count(*) as idle_in_transaction_count,
+                COALESCE(
+                    EXTRACT(EPOCH FROM max(now() - state_change)),
+                    0
+                ) as max_duration_seconds
+            FROM pg_stat_activity 
+            WHERE state = 'idle in transaction'
+            """
+            
+            with self.conn.cursor() as cur:  # type: ignore
+                cur.execute(query)
+                result = cur.fetchone()
+                
+                if result:
+                    idle_count = result['idle_in_transaction_count']  # type: ignore
+                    max_duration = result['max_duration_seconds']  # type: ignore
+                    
+                    # 更新指標
+                    self.metrics.idle_in_transaction_connections.set(idle_count)
+                    self.metrics.idle_in_transaction_max_duration_seconds.set(
+                        max_duration
+                    )
+                    
+                    # 如果有長時間 idle in transaction 連接，記錄警告
+                    if idle_count > 0:
+                        logger.info(
+                            f"Found {idle_count} idle in transaction connections, "
+                            f"max duration: {max_duration:.1f}s"
+                        )
+                        
+                        # 如果超過 5 分鐘，發出警告
+                        if max_duration > 300:
+                            logger.warning(
+                                f"Long idle in transaction connection detected: "
+                                f"{max_duration:.1f}s (> 5 minutes). "
+                                f"This may block retention jobs."
+                            )
+                    else:
+                        logger.info("No idle in transaction connections")
+        
+        except Exception as e:
+            logger.error(f"Error checking database connection health: {e}")
 
 
 def create_retention_monitor(db_config: Dict[str, Any]) -> RetentionMonitor:

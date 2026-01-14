@@ -177,6 +177,19 @@ class WebSocketCollector {
           });
         }
 
+      } else if (message.type === MessageType.KLINE) {
+        // 推送 K線資料到 Redis
+        await this.redisQueue.push(message);
+
+        // 記錄 K線數據收集
+        const klineData = message.data as any;
+        if (klineData.symbol) {
+          // 使用 trades metric 也記錄 kline（或可以新增專門的 kline metric）
+          this.metricsServer.redisQueuePushTotal.inc({
+            queue_type: 'kline'
+          });
+        }
+
       } else if (message.type === MessageType.ORDERBOOK_UPDATE) {
         // 更新本地訂單簿
         const update = message.data as OrderBookUpdate;
