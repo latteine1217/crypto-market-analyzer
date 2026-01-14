@@ -1,0 +1,40 @@
+# ============================================
+# Crypto Market Dashboard - Global App Configuration
+# ============================================
+
+# 系統環境
+system:
+  environment: ${ENVIRONMENT:development}
+  timezone: ${TZ:Asia/Taipei}
+  log_level: ${LOG_LEVEL:INFO}
+
+# 資料庫配置
+database:
+  timescaledb:
+    host: ${POSTGRES_HOST:localhost}
+    port: ${POSTGRES_PORT:5432}
+    user: ${POSTGRES_USER:crypto}
+    password: ${POSTGRES_PASSWORD:crypto_pass}
+    name: ${POSTGRES_DB:crypto_db}
+  
+  redis:
+    host: ${REDIS_HOST:localhost}
+    port: ${REDIS_PORT:6379}
+    db: ${REDIS_DB:0}
+    password: ${REDIS_PASSWORD:}
+
+# 監控與告警全域設定
+monitoring:
+  prometheus_port: ${PROMETHEUS_PORT:9090}
+  grafana_port: ${GRAFANA_PORT:3000}
+  metrics_export_port: ${METRICS_PORT:8000}
+  
+  alerts:
+    telegram_enabled: false
+    quality_threshold: ${QUALITY_THRESHOLD:80}
+
+# 預設收集參數
+collector_defaults:
+  interval_seconds: ${COLLECTOR_INTERVAL_SECONDS:60}
+  timeframe: ${DEFAULT_TIMEFRAME:1m}
+  limit: ${DEFAULT_LIMIT:1000}

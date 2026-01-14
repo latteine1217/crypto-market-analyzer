@@ -69,16 +69,6 @@ scrape_configs:
     static_configs:
       - targets: ['node-exporter:9100']
 
-  # MAD Anomaly Detector - MAD 異常檢測服務
-  - job_name: 'mad-detector'
-    static_configs:
-      - targets: ['mad-detector:8002']
-    metrics_path: '/metrics'
-    relabel_configs:
-      - source_labels: [__address__]
-        target_label: instance
-        replacement: 'mad-detector'
-
   # Retention Monitor - 資料保留策略監控 (運行在宿主機)
   - job_name: 'retention-monitor'
     static_configs:

@@ -120,4 +120,42 @@ router.get('/prices', async (req: Request, res: Response) => {
   }
 });
 
+// GET /api/markets/quality - 取得最新資料品質指標
+router.get('/quality', async (req: Request, res: Response) => {
+  try {
+    const cacheKey = cache.makeKey('markets', 'quality');
+    const cached = await cache.get(cacheKey);
+    
+    if (cached) {
+      return res.json({ data: cached, cached: true });
+    }
+
+    const result = await query(`
+      SELECT 
+        id,
+        symbol,
+        exchange,
+        timeframe,
+        check_time,
+        missing_rate,
+        duplicate_rate,
+        quality_score,
+        status,
+        missing_count,
+        expected_count,
+        backfill_task_created
+      FROM latest_data_quality
+      ORDER BY exchange, symbol, timeframe
+    `);
+
+    const quality = result.rows;
+    await cache.set(cacheKey, quality, 60); // 1 minute cache
+
+    res.json({ data: quality, cached: false });
+  } catch (err) {
+    logger.error('Error fetching market quality', err);
+    res.status(500).json({ error: 'Failed to fetch market quality' });
+  }
+});
+
 export { router as marketRoutes };

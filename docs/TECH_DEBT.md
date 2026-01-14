@@ -62,10 +62,12 @@ Target: 核心模組 80% 覆蓋率
 
 ## 🟡 High Priority
 
+## ✅ Completed
+
 ### TD-003: 資料品質量化未落地
-**Status**: 🟡 Open  
+**Status**: ✅ Completed  
 **Created**: 2026-01-15  
-**Impact**: 驗收標準無法驗證（K 線缺失率 ≤ 0.1%）
+**Completed**: 2026-01-15
 
 **問題描述**：
 - Migration 013 已建立 `data_quality_metrics` 表
@@ -73,22 +75,16 @@ Target: 核心模組 80% 覆蓋率
 - Dashboard 無法顯示品質趨勢
 
 **解決方案**：
-```python
-# 在 quality_checker.py 新增：
-def record_quality_metrics(self, market_id, timeframe, metrics):
-    """將品質指標寫入 data_quality_metrics 表"""
-    # Implementation...
-```
-
-**ETA**: 2026-01-17  
-**Assigned**: TBD
-
----
+- 驗證 `data_quality_metrics` 表結構
+- 確認 `db_loader.py` 已實作 `insert_quality_metrics`
+- 確認 `quality_checker.py` 已調用寫入邏輯
+- 修正 `quality_checker.py` 中缺失率計算邏輯 (支援頭尾缺失檢測)
+- 透過測試腳本驗證寫入成功
 
 ### TD-004: 配置檔碎片化
-**Status**: 🟡 Open  
+**Status**: ✅ Completed  
 **Created**: 2026-01-15  
-**Impact**: 配置分散、維護困難
+**Completed**: 2026-01-15
 
 **問題描述**：
 - 11 個 YAML 配置檔分散在 4 個目錄
@@ -96,22 +92,12 @@ def record_quality_metrics(self, market_id, timeframe, metrics):
 - 缺少 Bybit、OKX 的配置檔案
 
 **解決方案**：
-```
-configs/
-  ├── app.yml              # 整合應用配置
-  ├── collectors/          # 標準化收集器配置
-  │   ├── binance.yml
-  │   ├── bybit.yml
-  │   └── okx.yml
-  └── monitoring/          # 監控配置
-```
+- 建立 `configs/app.yml` 整合應用配置
+- 建立 `configs/collector/` 標準化收集器配置 (Binance, Bybit, OKX)
+- 建立 `configs/README.md` 說明配置結構
+- 修改 `config_loader.py` 支援 `api_passphrase`
 
-**ETA**: 2026-01-19  
-**Assigned**: TBD
-
----
-
-## 🟢 Medium Priority
+### TD-008: 前端效能與類型安全重構
 
 ### TD-005: Symbol 工具重複實作
 **Status**: 🟢 Open  

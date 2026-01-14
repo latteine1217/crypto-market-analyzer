@@ -96,8 +96,8 @@ services:
   # Node.js WebSocket Collector - 實時資料收集
   ws-collector:
     build:
-      context: ./data-collector
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: data-collector/Dockerfile
     container_name: crypto_ws_collector
     environment:
       - POSTGRES_HOST=db
@@ -119,6 +119,7 @@ services:
     volumes:
       - ./data-collector/src:/app/src
       - ./data-collector/logs:/app/logs
+      - ./shared:/app/shared:ro
     depends_on:
       db:
         condition: service_healthy

@@ -8,7 +8,8 @@ import type {
   FundingRate,
   OpenInterest,
   RichListStat,
-  Alert
+  Alert,
+  DataQualityMetrics
 } from '@/types/market';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
@@ -54,6 +55,11 @@ export const fetchMarkets = async (): Promise<Market[]> => {
 
 export const fetchMarketPrices = async (): Promise<MarketPrice[]> => {
   const response = await apiClient.get('/api/markets/prices');
+  return response.data.data;
+};
+
+export const fetchMarketQuality = async (): Promise<DataQualityMetrics[]> => {
+  const response = await apiClient.get('/api/markets/quality');
   return response.data.data;
 };
 

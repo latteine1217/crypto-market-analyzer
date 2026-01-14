@@ -8,6 +8,9 @@ import { DBConfig, RedisConfig, FlushConfig } from '../types';
 dotenv.config();
 
 export const config = {
+  // 交易所名稱
+  exchange: process.env.EXCHANGE || 'binance',
+
   // Redis 配置
   redis: {
     host: process.env.REDIS_HOST || 'localhost',

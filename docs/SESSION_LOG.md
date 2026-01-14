@@ -21,12 +21,83 @@
 ## 📅 Current Session (2026-01-15)
 
 ### Status
-- **Project Version**: v2.2.0 (Performance & UX Optimized)
-- **Current Phase**: Performance Refinement & UI/UX Enhancement
+- **Project Version**: v2.3.0 (Focused Markets & Quality Monitoring)
+- **Current Phase**: Quality Assurance & UI Integration
 
 ### Today's Progress
 
 #### ✅ Completed Tasks
+
+**Task 19: Docker & Build System Integration (Docker 與構建系統整合)** 🐳
+- **目標**: 確保 WebSocket Collector 能在 Docker 容器中正確編譯並引用外部 `shared` 代碼。
+- **執行項目**:
+  - **tsconfig 優化**: 調整 `data-collector/tsconfig.json` 的 `rootDir` 與 `include`，支援引用 `../shared/utils/RedisKeys.ts`。
+  - **Dockerfile 重構**: 
+    - 提升 Build Context 至專案根目錄。
+    - 修復編譯時的目錄結構，確保生產環境 `dist/` 路徑正確。
+    - 將 `npm ci` 降級為 `npm install` 以解決鎖檔不一致問題。
+  - **Docker Compose 更新**: 同步 `ws-collector` 的掛載路徑與 Build Context。
+  - **程式碼修正**: 
+    - 在 `config/index.ts` 中補上 `exchange` 屬性。
+    - 修復 `OKXWSClient.ts` 的編譯器警告與 `RedisQueue.ts` 的屬性存取錯誤。
+- **結果**: 
+  - ✅ `ws-collector` 映像構建成功。
+  - ✅ 解決跨目錄依賴問題。
+  - ✅ Prometheus 與 Redis 服務配置已同步。
+
+**Task 18: Redis Optimization & Key Standardization (Redis 優化與 Key 規範化)** 🚀
+- **目標**: 統一跨服務的 Redis Key 命名，優化快取效能，降低資料庫負擔。
+- **執行項目**:
+  - **統一 Key 管理**: 建立 `shared/utils/RedisKeys.ts`，集中管理所有 Redis Key 模式（支援 Versioning `v2`）。
+  - **Collector 優化**:
+    - 重構 `RedisQueue.ts`，為所有佇列加入 1 小時 TTL，防止記憶體無限增長。
+    - 在訂單簿快照 Key 中加入 `exchange` 欄位，解決多交易所 Key 衝突問題。
+    - 使用 Redis Pipeline 優化 `getAllQueueSizes` 效能。
+  - **API Server 優化**:
+    - 更新 `CacheService` 以整合 `RedisKeys` 並支援 Hash 操作。
+    - 重構 `/api/orderbook/:exchange/:symbol/latest` 路由，實作 **Redis-First** 策略，優先讀取 Collector 寫入的即時快照。
+- **結果**: 
+  - ✅ 實現跨服務 Key 一致性。
+  - ✅ 降低 `/latest` 訂單簿請求的延遲（由 DB 查詢轉為 Redis 內存讀取）。
+  - ✅ 提升系統健壯性，防止 Redis 記憶體溢出。
+
+**Task 17: Refactor Data Collector Registry (數據收集器重構 - 註冊表模式)** 🛠️
+- **目標**: 使用映射表 (Registry) 動態加載交易所客戶端，提升擴展性與程式碼整潔度。
+- **執行項目**:
+  - **型別修正**: 在 `data-collector/src/types/index.ts` 中修復 `IWSClient` 介面，匯入 `EventEmitter` 並完善定義。
+  - **建立註冊表**: 新增 `data-collector/src/ExchangeRegistry.ts`，實作交易所客戶端的自動註冊與動態實例化。
+  - **主程式重構**: 修改 `data-collector/src/index.ts`，移除手動的 `if/else` 客戶端建立邏輯，改用 `ExchangeRegistry.createClient`。
+  - **介面一致性**: 確保 `BinanceWSClient`, `BybitWSClient`, `OKXWSClient` 均符合 `IWSClient` 介面。
+- **結果**: 
+  - ✅ 程式碼邏輯更簡潔，支援「不修改主程式」即可新增交易所。
+  - ✅ 提升 TypeScript 型別安全性。
+  - ✅ 降低不同交易所實作間的耦合度。
+
+**Task 16: Market Cleanup & Quality Dashboard (市場清理與品質面板)** 🎯
+- **目標**: 專注核心市場 (BTC/ETH)，實現資料品質指標視覺化。
+- **執行項目**:
+  - **市場清理**: 從 `markets` 表中刪除非 BTCUSDT/ETHUSDT 的所有記錄，清理了 7 個市場。
+  - **API 擴展**: 在 API Server 新增 `/api/markets/quality` 端點。
+  - **品質面板**: 建立 `DataQualityStatus` 元件，即時監控 K 線缺失率與品質評分。
+  - **UI 整合**: 將品質面板整合至 Dashboard 首頁，並更新系統統計數據。
+- **結果**: 
+  - ✅ 系統僅追蹤 6 個核心市場。
+  - ✅ 實現「資料缺失率 ≤ 0.1%」的視覺化驗收。
+
+**Task 15: Technical Debt Resolution (技術債清理)** 🛠️
+...
+
+**Task 14: Documentation & File Organization (文件與檔案整理)** 🧹
+- **目標**: 整理專案根目錄、`docs/` 與 `scripts/` 中的過時檔案與報告，保持專案結構清晰。
+- **執行項目**:
+  - 建立 `docs/archive/reports/` 與 `scripts/archive/` 目錄。
+  - 將已完成的任務報告 (e.g., `DOCKER_INTEGRATION_REPORT.md`, `DASHBOARD_TS_COMPLETION_REPORT.md`) 移動至 archive。
+  - 將一次性遷移腳本 (e.g., `migration_004.sh`) 移動至 archive。
+  - 將 `unused-modules-20260115.tar.gz` 移動至 `.archived/`。
+- **結果**: 
+  - ✅ `docs/` 目錄僅保留核心文檔 (`PROJECT_STATUS_REPORT`, `SESSION_LOG` 等)。
+  - ✅ `scripts/` 目錄更專注於日常運維腳本。
+  - ✅ 專案根目錄更加整潔。
 
 **Task 13: Critical Fixes & Code Cleanup (關鍵修復與代碼清理)** 🎯
 - **目標**: 修復高風險問題 (P0)，提升類型安全與記憶體管理，清理未使用的依賴

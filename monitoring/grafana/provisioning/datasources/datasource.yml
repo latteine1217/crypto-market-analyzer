@@ -14,3 +14,19 @@ datasources:
       httpMethod: POST
       timeInterval: 15s
     version: 1
+
+  - name: TimescaleDB
+    type: postgres
+    url: db:5432
+    database: crypto_db
+    user: crypto
+    secureJsonData:
+      password: crypto_pass
+    jsonData:
+      sslmode: 'disable'
+      postgresVersion: 1500 # PostgreSQL 15
+      timescaledb: true
+      maxOpenConns: 20
+      maxIdleConns: 20
+      connMaxLifetime: 14400
+    editable: true

@@ -6,11 +6,12 @@ import Redis from 'ioredis';
 import { log } from '../utils/logger';
 import { config } from '../config';
 import { QueueMessage, MessageType } from '../types';
+import { RedisKeys } from '../../../shared/utils/RedisKeys';
 
 export class RedisQueue {
   private client: Redis;
-  private readonly QUEUE_PREFIX = 'crypto:queue:';
   private readonly MAX_QUEUE_SIZE = 10000;
+  private readonly QUEUE_TTL = 3600; // 1 小時
 
   constructor() {
     this.client = new Redis({
@@ -44,23 +45,21 @@ export class RedisQueue {
    * 推送訊息到佇列
    */
   public async push(message: QueueMessage): Promise<void> {
-    const queueKey = this.getQueueKey(message.type);
+    const queueKey = RedisKeys.getQueueKey(message.type);
 
     try {
-      // 檢查佇列大小
-      const queueSize = await this.client.llen(queueKey);
-
-      if (queueSize >= this.MAX_QUEUE_SIZE) {
-        log.warn('Queue size limit reached', {
-          queue: queueKey,
-          size: queueSize
-        });
-        // 移除最舊的訊息
-        await this.client.lpop(queueKey);
-      }
-
+      const pipeline = this.client.pipeline();
+      
       // 推送到佇列尾端
-      await this.client.rpush(queueKey, JSON.stringify(message));
+      pipeline.rpush(queueKey, JSON.stringify(message));
+      
+      // 設置 TTL
+      pipeline.expire(queueKey, this.QUEUE_TTL);
+      
+      // 限制長度
+      pipeline.ltrim(queueKey, -this.MAX_QUEUE_SIZE, -1);
+
+      await pipeline.exec();
 
     } catch (error) {
       log.error('Failed to push message to queue', error);
@@ -79,8 +78,10 @@ export class RedisQueue {
     const pipeline = this.client.pipeline();
 
     for (const message of messages) {
-      const queueKey = this.getQueueKey(message.type);
+      const queueKey = RedisKeys.getQueueKey(message.type);
       pipeline.rpush(queueKey, JSON.stringify(message));
+      pipeline.expire(queueKey, this.QUEUE_TTL);
+      pipeline.ltrim(queueKey, -this.MAX_QUEUE_SIZE, -1);
     }
 
     try {
@@ -95,7 +96,7 @@ export class RedisQueue {
    * 從佇列取出訊息（批次）
    */
   public async pop(type: MessageType, count: number = 100): Promise<QueueMessage[]> {
-    const queueKey = this.getQueueKey(type);
+    const queueKey = RedisKeys.getQueueKey(type);
     const messages: QueueMessage[] = [];
 
     try {
@@ -127,7 +128,7 @@ export class RedisQueue {
    * 獲取佇列大小
    */
   public async getQueueSize(type: MessageType): Promise<number> {
-    const queueKey = this.getQueueKey(type);
+    const queueKey = RedisKeys.getQueueKey(type);
     return await this.client.llen(queueKey);
   }
 
@@ -135,17 +136,25 @@ export class RedisQueue {
    * 獲取所有佇列的大小
    */
   public async getAllQueueSizes(): Promise<Map<MessageType, number>> {
-    const sizes = new Map<MessageType, number>();
     const types = [
       MessageType.TRADE,
       MessageType.ORDERBOOK_SNAPSHOT,
-      MessageType.ORDERBOOK_UPDATE
+      MessageType.ORDERBOOK_UPDATE,
+      MessageType.KLINE
     ];
 
-    for (const type of types) {
-      const size = await this.getQueueSize(type);
+    const pipeline = this.client.pipeline();
+    types.forEach(type => {
+      pipeline.llen(RedisKeys.getQueueKey(type));
+    });
+
+    const results = await pipeline.exec();
+    const sizes = new Map<MessageType, number>();
+
+    types.forEach((type, index) => {
+      const size = (results?.[index]?.[1] as number) || 0;
       sizes.set(type, size);
-    }
+    });
 
     return sizes;
   }
@@ -154,7 +163,7 @@ export class RedisQueue {
    * 清空佇列
    */
   public async clearQueue(type: MessageType): Promise<void> {
-    const queueKey = this.getQueueKey(type);
+    const queueKey = RedisKeys.getQueueKey(type);
     await this.client.del(queueKey);
     log.info(`Queue cleared: ${queueKey}`);
   }
@@ -166,13 +175,16 @@ export class RedisQueue {
     symbol: string,
     snapshot: any
   ): Promise<void> {
-    const key = `crypto:orderbook:${symbol}`;
+    // 從快照中獲取 exchange，或者如果傳入參數沒有，就從 config 拿
+    const exchange = snapshot.exchange || config.exchange || 'unknown';
+    const key = RedisKeys.getOrderBookKey(exchange, symbol);
 
     try {
       await this.client.hset(
         key,
         'data', JSON.stringify(snapshot),
-        'timestamp', Date.now().toString()
+        'timestamp', Date.now().toString(),
+        'exchange', exchange
       );
 
       // 設置過期時間（10 分鐘）
@@ -187,8 +199,8 @@ export class RedisQueue {
   /**
    * 獲取訂單簿快照
    */
-  public async getOrderBookSnapshot(symbol: string): Promise<any | null> {
-    const key = `crypto:orderbook:${symbol}`;
+  public async getOrderBookSnapshot(exchange: string, symbol: string): Promise<any | null> {
+    const key = RedisKeys.getOrderBookKey(exchange, symbol);
 
     try {
       const data = await this.client.hget(key, 'data');
@@ -227,13 +239,6 @@ export class RedisQueue {
     }
 
     return result;
-  }
-
-  /**
-   * 取得佇列鍵名
-   */
-  private getQueueKey(type: MessageType): string {
-    return `${this.QUEUE_PREFIX}${type}`;
   }
 
   /**

@@ -1,5 +1,6 @@
 import Redis from 'ioredis';
 import { logger } from '../utils/logger';
+import { RedisKeys } from '../../shared/utils/RedisKeys';
 
 const ENABLE_CACHE = process.env.ENABLE_CACHE !== 'false';
 
@@ -68,8 +69,36 @@ export class CacheService {
     }
   }
 
+  /**
+   * 直接獲取 Redis 中的原始字串（用於讀取 data-collector 寫入的 JSON）
+   */
+  async getRaw(key: string): Promise<string | null> {
+    try {
+      return await redis.get(key);
+    } catch (err) {
+      logger.error(`Redis getRaw error for key ${key}`, err);
+      return null;
+    }
+  }
+
+  /**
+   * 獲取 Hash 中的欄位
+   */
+  async hget(key: string, field: string): Promise<string | null> {
+    try {
+      return await redis.hget(key, field);
+    } catch (err) {
+      logger.error(`Redis hget error for key ${key} field ${field}`, err);
+      return null;
+    }
+  }
+
   makeKey(...parts: (string | number)[]): string {
-    return parts.join(':');
+    return RedisKeys.getCacheKey(parts.join(':'));
+  }
+
+  getRedisKeys() {
+    return RedisKeys;
   }
 }
 

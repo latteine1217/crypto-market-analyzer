@@ -1,6 +1,7 @@
 /**
  * WebSocket 數據收集器類型定義
  */
+import { EventEmitter } from 'events';
 
 // WebSocket 訊息類型
 export enum MessageType {
@@ -144,4 +145,13 @@ export interface Stats {
   reconnectCount: number;
   errorCount: number;
   uptimeMs: number;
+}
+
+// WebSocket 客戶端通用介面
+export interface IWSClient extends EventEmitter {
+  connect(): void;
+  disconnect(): void;
+  getState(): ConnectionState;
+  getStats(): Stats;
+  on(event: string, listener: (...args: any[]) => void): this;
 }

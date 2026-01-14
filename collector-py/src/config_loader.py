@@ -22,6 +22,7 @@ class ExchangeConfig:
     api_endpoint: str
     api_key: Optional[str] = None
     api_secret: Optional[str] = None
+    api_passphrase: Optional[str] = None
 
 
 @dataclass

@@ -128,3 +128,18 @@ export interface Alert {
   triggered_at: string | null
   created_at: string
 }
+
+export interface DataQualityMetrics {
+  id: number
+  exchange: string
+  symbol: string
+  timeframe: string
+  check_time: string
+  missing_rate: number
+  duplicate_rate: number
+  quality_score: number
+  status: 'excellent' | 'good' | 'acceptable' | 'poor' | 'critical'
+  missing_count: number
+  expected_count: number
+  backfill_task_created: boolean
+}

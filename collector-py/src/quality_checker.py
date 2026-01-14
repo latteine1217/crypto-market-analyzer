@@ -159,7 +159,15 @@ class DataQualityChecker:
             validation_result['warnings'] = warnings
             
             # 計算總缺失數
-            missing_count = sum(gap['missing_count'] for gap in missing_intervals)
+            missing_count_from_gaps = sum(gap['missing_count'] for gap in missing_intervals)
+        else:
+            missing_count_from_gaps = 0
+
+        # 計算最終缺失數
+        # 取 "中間斷層缺失" 與 "總量預期缺失" 的較大值，以涵蓋頭尾缺失的情況
+        # 注意：由於資料庫有唯一約束，actual_count 不會包含重複時間戳
+        missing_count = max(missing_count_from_gaps, expected_count - actual_count)
+        missing_count = max(0, missing_count)  # 確保不為負數
 
         # 計算缺失率
         missing_rate = missing_count / expected_count if expected_count > 0 else 0.0

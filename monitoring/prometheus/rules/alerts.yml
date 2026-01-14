@@ -17,17 +17,17 @@ groups:
           summary: "Collector 超過 30 分鐘未成功收集 K 線數據"
           description: "Collector 最後一次成功收集時間：{{ $value | humanizeDuration }} 前"
 
-      # Alert 2: 某 symbol 當日缺失率 > 5%
+      # Alert 2: 某 symbol 當日缺失率 > 0.1% (根據 AGENTS.md 標準)
       - alert: HighDataMissingRate
         expr: |
-          collector_missing_data_rate{period="daily"} > 0.05
-        for: 10m
+          collector_missing_data_rate > 0.001
+        for: 5m
         labels:
           severity: warning
           component: quality
         annotations:
-          summary: "{{ $labels.symbol }} 當日資料缺失率過高"
-          description: "{{ $labels.symbol }} 當日缺失率：{{ $value | printf \"%.2f%%\" }}（閾值：5%）"
+          summary: "{{ $labels.symbol }} 資料缺失率超過標準 (0.1%)"
+          description: "{{ $labels.symbol }} 當前缺失率：{{ $value | printf \"%.4f%%\" }}（閾值：0.1%）"
 
       # Alert 3: Collector 程式異常退出
       - alert: CollectorProcessDown
@@ -63,10 +63,10 @@ groups:
   - name: database_alerts
     interval: 60s
     rules:
-      # DB 寫入速率異常低（修正版本：使用合理閾值與清晰單位）
+      # DB 寫入速率異常低 (6個市場，1m間隔預期 0.1 rows/sec)
       - alert: LowDatabaseWriteRate
         expr: |
-          (rate(collector_db_writes_total[5m]) < 0.01)
+          (rate(collector_db_writes_total[5m]) < 0.05)
           and
           (rate(collector_db_writes_total[5m]) > 0)
         for: 10m
@@ -75,7 +75,7 @@ groups:
           component: database
         annotations:
           summary: "資料庫寫入速率異常低"
-          description: "過去 5 分鐘平均寫入：{{ $value | printf \"%.4f\" }} rows/sec（預期：≥ 0.01），資料收集可能停滯"
+          description: "過去 5 分鐘平均寫入：{{ $value | printf \"%.4f\" }} rows/sec（閾值：0.05），低於 6 個市場的預期，資料收集可能有缺漏"
 
       # 資料收集完全停止（更嚴重的情況）
       - alert: DatabaseWriteStopped
@@ -178,69 +178,3 @@ groups:
         annotations:
           summary: "{{ $labels.symbol }} 價格異常停滯"
           description: "{{ $labels.symbol }} 價格在過去 10 分鐘內沒有變化（當前價格：{{ $labels.price }}），可能是數據源問題"
-
-  # MAD 異常檢測告警
-  - name: mad_anomaly_alerts
-    interval: 30s
-    rules:
-      # MAD 檢測到異常（警告級別）
-      - alert: MADAnomalyDetected
-        expr: |
-          mad_anomaly_score{symbol=~"BTC.*|ETH.*"} > 3
-        for: 1m
-        labels:
-          severity: warning
-          component: mad_detector
-        annotations:
-          summary: "MAD 檢測到 {{ $labels.symbol }} 異常"
-          description: "{{ $labels.symbol }} 異常分數: {{ $value | humanize }}（閾值: 3.0），當前價格偏離中位數較大"
-
-      # MAD 檢測到嚴重異常（嚴重級別）
-      - alert: MADSevereAnomaly
-        expr: |
-          mad_anomaly_score{symbol=~"BTC.*|ETH.*"} > 5
-        for: 30s
-        labels:
-          severity: critical
-          component: mad_detector
-        annotations:
-          summary: "MAD 檢測到 {{ $labels.symbol }} 嚴重異常 🚨"
-          description: "{{ $labels.symbol }} 異常分數: {{ $value | humanize }}（閾值: 5.0）⚠️ 價格嚴重偏離正常範圍，請立即檢查！"
-
-      # MAD 異常檢測率過高
-      - alert: HighAnomalyRate
-        expr: |
-          (
-            rate(mad_anomaly_detected_total{severity="warning"}[1h]) > 0.1
-          )
-        for: 5m
-        labels:
-          severity: warning
-          component: mad_detector
-        annotations:
-          summary: "{{ $labels.symbol }} 異常檢測率過高"
-          description: "{{ $labels.symbol }} 過去 1 小時異常檢測率: {{ $value | printf \"%.2f%%\" }}（超過 10%），市場可能處於高波動狀態"
-
-      # MAD 檢測服務停止運行
-      - alert: MADDetectorDown
-        expr: |
-          up{job="mad-detector"} == 0
-        for: 3m
-        labels:
-          severity: critical
-          component: mad_detector
-        annotations:
-          summary: "MAD 異常檢測服務停止運行"
-          description: "MAD Detector 已經停止運行超過 3 分鐘，異常檢測功能不可用"
-
-      # MAD 檢測延遲過高
-      - alert: MADDetectionHighLatency
-        expr: |
-          mad_detection_latency_seconds{quantile="0.99"} > 5
-        for: 5m
-        labels:
-          severity: warning
-          component: mad_detector
-        annotations:
-          summary: "MAD 異常檢測延遲過高"
-          description: "{{ $labels.symbol }} 的 99 分位檢測延遲: {{ $value | printf \"%.2f\" }}s（預期: < 5s），可能影響即時監控"

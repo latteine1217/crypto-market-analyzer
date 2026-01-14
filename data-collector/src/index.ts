@@ -4,8 +4,7 @@
  */
 import { log } from './utils/logger';
 import { config, validateConfig, displayConfig } from './config';
-import { BinanceWSClient } from './binance_ws/BinanceWSClient';
-import { BybitWSClient } from './bybit_ws/BybitWSClient';
+import { ExchangeRegistry } from './ExchangeRegistry';
 import { OrderBookManager } from './orderbook_handlers/OrderBookManager';
 import { RedisQueue } from './queues/RedisQueue';
 import { DBFlusher } from './database/DBFlusher';
@@ -15,11 +14,12 @@ import {
   QueueMessage,
   MessageType,
   OrderBookUpdate,
-  OrderBookSnapshot
+  OrderBookSnapshot,
+  IWSClient
 } from './types';
 
 class WebSocketCollector {
-  private wsClient: BinanceWSClient | BybitWSClient | null = null;
+  private wsClient: IWSClient | null = null;
   private orderBookManager: OrderBookManager;
   private redisQueue: RedisQueue;
   private dbFlusher: DBFlusher;
@@ -42,7 +42,7 @@ class WebSocketCollector {
     this.redisQueue = new RedisQueue();
     this.dbFlusher = new DBFlusher(config.flush);
 
-    log.info('WebSocketCollector initialized');
+    log.info('WebSocketCollector initialized', { exchange: this.exchange });
   }
 
   /**
@@ -52,6 +52,7 @@ class WebSocketCollector {
     try {
       log.info('================================');
       log.info('WebSocket Data Collector');
+      log.info(`Exchange: ${this.exchange}`);
       log.info('================================\n');
 
       // 驗證配置
@@ -79,14 +80,9 @@ class WebSocketCollector {
         ...config.websocket
       };
 
-      // 建立 WebSocket 客戶端（根據配置選擇交易所）
-      if (this.exchange === 'bybit') {
-        log.info('Using Bybit WebSocket');
-        this.wsClient = new BybitWSClient(wsConfig);
-      } else {
-        log.info('Using Binance WebSocket');
-        this.wsClient = new BinanceWSClient(wsConfig);
-      }
+      // 使用 Registry 建立交易所客戶端
+      log.info(`\nCreating ${this.exchange} WebSocket client...`);
+      this.wsClient = ExchangeRegistry.createClient(this.exchange, wsConfig);
 
       // 設置事件處理
       this.setupEventHandlers();

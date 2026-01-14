@@ -1,4 +1,7 @@
+'use client';
+
 import Link from 'next/link'
+import { DataQualityStatus } from '@/components/DataQualityStatus'
 
 export default function HomePage() {
   return (
@@ -25,26 +28,37 @@ export default function HomePage() {
         </Link>
       </div>
 
-      <div className="card">
-        <h3 className="card-header">System Status</h3>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div>
-            <div className="stat-label">Data Collection</div>
-            <div className="stat-value text-success">Active</div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="card h-full">
+          <h3 className="card-header">System Status</h3>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <div className="stat-label">Data Collection</div>
+              <div className="stat-value text-success">Active</div>
+            </div>
+            <div>
+              <div className="stat-label">Markets</div>
+              <div className="stat-value">6</div>
+            </div>
+            <div>
+              <div className="stat-label">Exchanges</div>
+              <div className="stat-value">3</div>
+            </div>
+            <div>
+              <div className="stat-label">Uptime</div>
+              <div className="stat-value text-success">99.9%</div>
+            </div>
           </div>
-          <div>
-            <div className="stat-label">Markets</div>
-            <div className="stat-value">11</div>
-          </div>
-          <div>
-            <div className="stat-label">Exchanges</div>
-            <div className="stat-value">3</div>
-          </div>
-          <div>
-            <div className="stat-label">Uptime</div>
-            <div className="stat-value text-success">99.9%</div>
+          
+          <div className="mt-8 p-4 bg-primary/10 border border-primary/20 rounded-lg">
+            <h4 className="font-semibold text-primary mb-1">Configuration Note</h4>
+            <p className="text-xs text-gray-400">
+              Only BTC/USDT and ETH/USDT are tracked across Binance, Bybit, and OKX for optimized performance and focus.
+            </p>
           </div>
         </div>
+
+        <DataQualityStatus />
       </div>
     </div>
   )
