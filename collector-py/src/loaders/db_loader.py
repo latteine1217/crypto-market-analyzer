@@ -841,6 +841,77 @@ class DatabaseLoader:
         logger.info(f"Inserted {len(rows)} open interest records for market_id={market_id}")
         return len(rows)
 
+    def insert_news_batch(
+        self,
+        news_data: List[Dict]
+    ) -> int:
+        """
+        批次插入新聞數據
+
+        Args:
+            news_data: 格式化後的新聞列表
+
+        Returns:
+            插入的行數
+        """
+        if not news_data:
+            return 0
+
+        self.ensure_connection()
+        import json
+
+        rows = []
+        for news in news_data:
+            rows.append((
+                news['external_id'],
+                news['title'],
+                news['url'],
+                news['source_domain'],
+                news['published_at'],
+                news.get('votes_positive', 0),
+                news.get('votes_negative', 0),
+                news.get('votes_important', 0),
+                news.get('votes_liked', 0),
+                news.get('votes_disliked', 0),
+                news.get('votes_lol', 0),
+                news.get('votes_toxic', 0),
+                news.get('votes_save', 0),
+                news.get('kind'),
+                json.dumps(news.get('currencies', [])),
+                json.dumps(news.get('metadata', {}))
+            ))
+
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                execute_batch(
+                    cur,
+                    """
+                    INSERT INTO news (
+                        external_id, title, url, source_domain, published_at,
+                        votes_positive, votes_negative, votes_important,
+                        votes_liked, votes_disliked, votes_lol, votes_toxic, votes_save,
+                        kind, currencies, metadata
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (external_id) DO UPDATE SET
+                        votes_positive = EXCLUDED.votes_positive,
+                        votes_negative = EXCLUDED.votes_negative,
+                        votes_important = EXCLUDED.votes_important,
+                        votes_liked = EXCLUDED.votes_liked,
+                        votes_disliked = EXCLUDED.votes_disliked,
+                        votes_lol = EXCLUDED.votes_lol,
+                        votes_toxic = EXCLUDED.votes_toxic,
+                        votes_save = EXCLUDED.votes_save,
+                        metadata = EXCLUDED.metadata
+                    """,
+                    rows,
+                    page_size=100
+                )
+                conn.commit()
+
+        logger.info(f"Inserted {len(rows)} news items from CryptoPanic")
+        return len(rows)
+
     def close(self):
         """關閉連接池（通常不需要調用，除非程序退出）"""
         if DatabaseLoader._connection_pool:

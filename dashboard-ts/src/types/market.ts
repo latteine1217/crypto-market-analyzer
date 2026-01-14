@@ -143,3 +143,17 @@ export interface DataQualityMetrics {
   expected_count: number
   backfill_task_created: boolean
 }
+
+export interface NewsItem {
+  id: number
+  external_id: number
+  title: string
+  url: string
+  source_domain: string
+  published_at: string
+  votes_positive: number
+  votes_negative: number
+  votes_important: number
+  currencies: { code: string; title: string }[]
+  kind: string
+}

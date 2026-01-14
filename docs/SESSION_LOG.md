@@ -28,6 +28,21 @@
 
 #### ✅ Completed Tasks
 
+**Task 20: CryptoPanic News Integration (CryptoPanic 新聞整合)** 📰
+- **目標**: 抓取實時加密貨幣新聞並整合情緒數據，提升市場洞察力。
+- **執行項目**:
+  - **資料庫設計**: 建立 `news` 表，儲存標題、連結、情緒投票 (Votes) 與關聯幣種。
+  - **Collector 實作**: 新增 `cryptopanic_collector.py`，支援 REST API 抓取與環境變數 API Key 驗證。
+  - **欄位解析修正**: 修復 API 回傳 `url` 為空導致資料庫 `NOT NULL` 約束違反的問題。實作 fallback 邏輯，若 `url` 缺失則依據 `id` 與 `slug` 自動構造 URL。
+  - **系統整合**: 在 `main.py` 中註冊每 30 分鐘執行一次的新聞抓取任務。
+  - **API 開發**: 在 API Server 新增 `GET /api/news` 端點，支援幣種過濾與 60 秒快取。
+  - **前端展示**: 在 Dashboard 首頁實作 `NewsList` 組件，顯示即時新聞與社群投票熱度。
+- **結果**: 
+  - ✅ 實現全自動化新聞收集與持久化。
+  - ✅ 解決 `url` 欄位缺失導致的寫入失敗問題。
+  - ✅ 前端可即時查看影響市場的新聞事件。
+  - ✅ 支援幣種關聯查詢。
+
 **Task 19: Docker & Build System Integration (Docker 與構建系統整合)** 🐳
 - **目標**: 確保 WebSocket Collector 能在 Docker 容器中正確編譯並引用外部 `shared` 代碼。
 - **執行項目**:

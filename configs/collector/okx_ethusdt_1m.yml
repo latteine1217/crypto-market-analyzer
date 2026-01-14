@@ -1,10 +1,10 @@
 # ============================================
-# OKX BTC/USDT 1分鐘 K線 Collector 配置
+# OKX ETH/USDT 1分鐘 K線 Collector 配置
 # ============================================
 
 # 基本資訊
-name: okx_btcusdt_1m
-description: "OKX BTC/USDT 1分鐘 K線資料收集"
+name: okx_ethusdt_1m
+description: "OKX ETH/USDT 1分鐘 K線資料收集"
 
 # 交易所配置
 exchange:
@@ -16,9 +16,9 @@ exchange:
 
 # 交易對配置
 symbol:
-  base: BTC
+  base: ETH
   quote: USDT
-  exchange_symbol: BTC-USDT  # OKX 格式通常為 BTC-USDT
+  exchange_symbol: ETH-USDT
 
 # 資料類型配置
 data_type: ohlcv
@@ -50,13 +50,6 @@ request:
   retry_delay: 5
   backoff_factor: 2
 
-# 速率限制
-rate_limit:
-  requests_per_minute: 480
-  requests_per_second: 8
-  weight_per_request: 1
-  max_weight: 480
-
 # 資料驗證
 validation:
   enabled: true
@@ -80,12 +73,3 @@ error_handling:
   on_validation_error: skip_and_log
   on_storage_error: retry
   max_consecutive_failures: 10
-
-# 監控與日誌
-monitoring:
-  log_every_n_batches: 10
-  metrics:
-    - rows_inserted
-    - api_calls
-    - api_errors
-    - validation_failures

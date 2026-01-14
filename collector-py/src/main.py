@@ -21,8 +21,11 @@ from config import settings
 from config_loader import ConfigLoader, CollectorConfig
 from connectors.binance_rest import BinanceRESTConnector
 from connectors.okx_rest import OKXRESTConnector
+from connectors.bybit_rest import BybitClient
 from connectors.funding_rate_collector import FundingRateCollector
 from connectors.open_interest_collector import OpenInterestCollector
+from connectors.cryptopanic_collector import CryptoPanicCollector
+from connectors.bitinfocharts import BitInfoChartsClient
 from loaders.db_loader import DatabaseLoader
 from validators.data_validator import DataValidator
 from schedulers.backfill_scheduler import BackfillScheduler
@@ -100,6 +103,12 @@ class ConfigDrivenCollector:
         self.open_interest_collectors = {}
         self._init_derivatives_collectors()
 
+        # 初始化 CryptoPanic Collector
+        self.news_collector = CryptoPanicCollector()
+
+        # 初始化 BitInfoCharts Collector (Rich List)
+        self.rich_list_collector = BitInfoChartsClient()
+
         logger.info(f"ConfigDrivenCollector initialized with {len(self.collector_configs)} configs")
 
     def _init_connectors(self):
@@ -119,7 +128,25 @@ class ConfigDrivenCollector:
                     api_secret=binance_cfg.exchange.api_secret
                 )
             elif exchange_name == 'okx':
-                self.connectors['okx'] = OKXRESTConnector()
+                okx_cfg = next(
+                    cfg for cfg in self.collector_configs
+                    if cfg.exchange.name == 'okx'
+                )
+                self.connectors['okx'] = OKXRESTConnector(
+                    api_key=okx_cfg.exchange.api_key,
+                    api_secret=okx_cfg.exchange.api_secret,
+                    password=okx_cfg.exchange.passphrase
+                )
+            elif exchange_name == 'bybit':
+                # 從第一個 bybit 配置取得 API 金鑰
+                bybit_cfg = next(
+                    cfg for cfg in self.collector_configs
+                    if cfg.exchange.name == 'bybit'
+                )
+                self.connectors['bybit'] = BybitClient(
+                    api_key=bybit_cfg.exchange.api_key,
+                    api_secret=bybit_cfg.exchange.api_secret
+                )
 
         logger.info(f"Initialized connectors for: {list(self.connectors.keys())}")
 
@@ -430,6 +457,74 @@ class ConfigDrivenCollector:
 
         logger.info("=" * 50 + "\n")
 
+    def run_news_collection(self):
+        """收集最新新聞"""
+        logger.info("=" * 50)
+        logger.info("News Collection Started")
+        logger.info("=" * 50)
+
+        try:
+            count = self.news_collector.run_collection(self.db)
+            if count > 0:
+                logger.success(f"Successfully collected {count} news items from CryptoPanic")
+            else:
+                logger.info("No new news items collected")
+        except Exception as e:
+            logger.error(f"Failed to collect news: {e}")
+
+        logger.info("=" * 50 + "\n")
+
+    def run_rich_list_collection(self):
+        """收集 Bitcoin Rich List 分佈數據"""
+        logger.info("=" * 50)
+        logger.info("Bitcoin Rich List Collection Started")
+        logger.info("=" * 50)
+
+        try:
+            stats = self.rich_list_collector.fetch_distribution_data()
+            if not stats:
+                logger.error("Failed to fetch rich list data")
+                return
+
+            # 取得 Blockchain ID for BTC
+            # 注意：這裡使用 db.conn 直接執行，維持與 update_rich_list.py 類似的邏輯
+            # 但更好的做法是整合進 db_loader
+            with self.db.conn.cursor() as cur:
+                cur.execute("SELECT id FROM blockchains WHERE name = 'BTC'")
+                res = cur.fetchone()
+                if not res:
+                    cur.execute("INSERT INTO blockchains (name, full_name, native_token) VALUES ('BTC', 'Bitcoin', 'BTC') RETURNING id")
+                    blockchain_id = cur.fetchone()[0]
+                else:
+                    blockchain_id = res[0]
+
+                timestamp = datetime.now()
+                inserted_count = 0
+                for row in stats:
+                    cur.execute("""
+                        INSERT INTO rich_list_stats 
+                        (snapshot_date, blockchain_id, symbol, rank_group, address_count, total_balance, total_balance_usd, percentage_of_supply, data_source)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'bitinfocharts')
+                    """, (
+                        timestamp,
+                        blockchain_id,
+                        row['symbol'],
+                        row['rank_group'],
+                        row['address_count'],
+                        row['total_balance'],
+                        row['total_balance_usd'],
+                        row['percentage_of_supply']
+                    ))
+                    inserted_count += 1
+                
+                self.db.conn.commit()
+                logger.success(f"Successfully inserted {inserted_count} rich list records for BTC")
+
+        except Exception as e:
+            logger.error(f"Failed to collect rich list: {e}")
+
+        logger.info("=" * 50 + "\n")
+
 
     def run_quality_check_cycle(self):
         """執行品質檢查循環"""
@@ -715,6 +810,23 @@ class ConfigDrivenCollector:
             id='open_interest_collection'
         )
 
+        # 新聞收集（每 30 分鐘）
+        scheduler.add_job(
+            self.run_news_collection,
+            'interval',
+            minutes=30,
+            id='news_collection'
+        )
+
+        # Rich List 收集（每日一次，UTC 00:15）
+        scheduler.add_job(
+            self.run_rich_list_collection,
+            'cron',
+            hour=0,
+            minute=15,
+            id='rich_list_collection'
+        )
+
         logger.info("Scheduler started with following jobs:")
         logger.info(f"  - collect_crypto_data: every {settings.collector_interval_seconds}s")
         logger.info("  - quality_check: every 10 minutes")
@@ -753,6 +865,12 @@ def main():
     # 執行一次衍生品收集
     collector.run_open_interest_collection()
     collector.run_funding_rate_collection()
+    
+    # 執行一次新聞收集
+    collector.run_news_collection()
+
+    # 執行一次 Rich List 收集
+    collector.run_rich_list_collection()
 
     # 啟動定時任務
     collector.start_scheduler()

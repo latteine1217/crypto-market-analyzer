@@ -76,11 +76,13 @@ services:
       - BINANCE_API_SECRET=${BINANCE_API_SECRET:-}
       - ETHERSCAN_API_KEY=${ETHERSCAN_API_KEY:-}
       - BSCSCAN_API_KEY=${BSCSCAN_API_KEY:-}
+      - CRYPTOPANIC_API_KEY=${CRYPTOPANIC_API_KEY:-}
       - COLLECTOR_CONFIG_DIR=/app/configs/collector
     ports:
       - "${COLLECTOR_METRICS_PORT:-8000}:8000"  # Prometheus metrics
     volumes:
       - ./collector-py/src:/app/src
+      - ./collector-py/scripts:/app/scripts
       - ./collector-py/logs:/app/logs
       - ./configs:/app/configs:ro
       - ./shared:/app/shared:ro
@@ -93,12 +95,12 @@ services:
     networks:
       - crypto_network
 
-  # Node.js WebSocket Collector - 實時資料收集
-  ws-collector:
+  # Node.js WebSocket Collector - Binance
+  ws-collector-binance:
     build:
       context: .
       dockerfile: data-collector/Dockerfile
-    container_name: crypto_ws_collector
+    container_name: crypto_ws_collector_binance
     environment:
       - POSTGRES_HOST=db
       - POSTGRES_PORT=5432
@@ -110,12 +112,84 @@ services:
       - REDIS_DB=${REDIS_DB:-0}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - TZ=${TZ:-Asia/Taipei}
-      - EXCHANGE=${EXCHANGE:-bybit}
+      - EXCHANGE=binance
       - SYMBOLS=${WS_SYMBOLS:-BTCUSDT,ETHUSDT}
       - STREAMS=${WS_STREAMS:-trade,depth,kline_1m}
-      - METRICS_PORT=${WS_COLLECTOR_METRICS_PORT:-8001}
+      - METRICS_PORT=8004
     ports:
-      - "${WS_COLLECTOR_METRICS_PORT:-8001}:8001"  # Prometheus metrics
+      - "8004:8004"
+    volumes:
+      - ./data-collector/src:/app/src
+      - ./data-collector/logs:/app/logs
+      - ./shared:/app/shared:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - crypto_network
+
+  # Node.js WebSocket Collector - Bybit
+  ws-collector-bybit:
+    build:
+      context: .
+      dockerfile: data-collector/Dockerfile
+    container_name: crypto_ws_collector_bybit
+    environment:
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-crypto_db}
+      - POSTGRES_USER=${POSTGRES_USER:-crypto}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-crypto_pass}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=${REDIS_DB:-0}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TZ=${TZ:-Asia/Taipei}
+      - EXCHANGE=bybit
+      - SYMBOLS=${WS_SYMBOLS:-BTCUSDT,ETHUSDT}
+      - STREAMS=${WS_STREAMS:-trade,depth,kline_1m}
+      - METRICS_PORT=8002
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./data-collector/src:/app/src
+      - ./data-collector/logs:/app/logs
+      - ./shared:/app/shared:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - crypto_network
+
+  # Node.js WebSocket Collector - OKX
+  ws-collector-okx:
+    build:
+      context: .
+      dockerfile: data-collector/Dockerfile
+    container_name: crypto_ws_collector_okx
+    environment:
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-crypto_db}
+      - POSTGRES_USER=${POSTGRES_USER:-crypto}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-crypto_pass}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=${REDIS_DB:-0}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TZ=${TZ:-Asia/Taipei}
+      - EXCHANGE=okx
+      - SYMBOLS=${WS_SYMBOLS:-BTCUSDT,ETHUSDT}
+      - STREAMS=${WS_STREAMS:-trade,depth,kline_1m}
+      - METRICS_PORT=8003
+    ports:
+      - "8003:8003"
     volumes:
       - ./data-collector/src:/app/src
       - ./data-collector/logs:/app/logs

@@ -10,7 +10,7 @@ export function Navbar() {
   const [isMenuOpen, setIsMenuOpen] = useState(false)
 
   const links = [
-    { href: '/overview', label: 'Overview' },
+    { href: '/', label: 'Home' },
     { href: '/technical', label: 'Technical' },
     { href: '/liquidity', label: 'Liquidity' },
     { href: '/onchain', label: 'On-Chain' },

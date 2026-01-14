@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { query } from '../database/pool';
 import { CacheService } from '../database/cache';
 import { logger } from '../utils/logger';
-import { RedisKeys } from '../../shared/utils/RedisKeys';
+import { RedisKeys } from '../shared_copy/utils/RedisKeys';
 
 const router = Router();
 const cache = new CacheService(2); // 2 seconds cache for orderbook

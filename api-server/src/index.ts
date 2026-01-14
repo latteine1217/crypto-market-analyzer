@@ -11,6 +11,8 @@ import { orderbookRoutes } from './routes/orderbook';
 import { derivativesRoutes } from './routes/derivatives';
 import { blockchainRoutes } from './routes/blockchain';
 import { alertRoutes } from './routes/alerts';
+import { newsRoutes } from './routes/news';
+import { analyticsRoutes } from './routes/analytics';
 import { startAlertMonitor } from './services/alertService';
 
 dotenv.config();
@@ -36,6 +38,8 @@ app.use('/api/orderbook', orderbookRoutes);
 app.use('/api/derivatives', derivativesRoutes);
 app.use('/api/blockchain', blockchainRoutes);
 app.use('/api/alerts', alertRoutes);
+app.use('/api/news', newsRoutes);
+app.use('/api/analytics', analyticsRoutes);
 
 // Error handling
 app.use(errorHandler);

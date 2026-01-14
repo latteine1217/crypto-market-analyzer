@@ -1,6 +1,6 @@
 import Redis from 'ioredis';
 import { logger } from '../utils/logger';
-import { RedisKeys } from '../../shared/utils/RedisKeys';
+import { RedisKeys } from '../shared_copy/utils/RedisKeys';
 
 const ENABLE_CACHE = process.env.ENABLE_CACHE !== 'false';
 

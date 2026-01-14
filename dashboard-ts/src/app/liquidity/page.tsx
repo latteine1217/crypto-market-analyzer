@@ -2,8 +2,9 @@
 
 import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { fetchLatestOrderbook, fetchMarkets } from '@/lib/api-client'
+import { fetchLatestOrderbook, fetchMarkets, fetchOrderSizeAnalytics } from '@/lib/api-client'
 import { DepthChart } from '@/components/charts/DepthChart'
+import { OrderSizeChart } from '@/components/charts/OrderSizeChart'
 import type { OrderBookLevel } from '@/types/market'
 
 export default function LiquidityPage() {
@@ -13,6 +14,12 @@ export default function LiquidityPage() {
   const { data: markets } = useQuery({
     queryKey: ['markets'],
     queryFn: fetchMarkets,
+  })
+
+  const { data: orderSizeData } = useQuery({
+    queryKey: ['analytics-order-size', exchange, symbol],
+    queryFn: () => fetchOrderSizeAnalytics(exchange, symbol),
+    refetchInterval: 60000, // Refresh every minute
   })
 
   const { data: orderbook, isLoading } = useQuery({
@@ -145,6 +152,10 @@ export default function LiquidityPage() {
             <div className="p-4">
               <DepthChart orderbook={orderbook} />
             </div>
+          </div>
+
+          <div className="mt-6">
+            <OrderSizeChart data={orderSizeData || []} symbol={symbol} />
           </div>
 
           <div className="card">

@@ -64,19 +64,17 @@ router.get('/prices', async (req: Request, res: Response) => {
         JOIN markets m ON o.market_id = m.id
         JOIN exchanges e ON m.exchange_id = e.id
         WHERE o.timeframe = '1m'
+          AND o.open_time >= NOW() - INTERVAL '25 hours'
         ORDER BY m.id, o.open_time DESC
       ),
-      prices_24h_ago AS (
+      first_prices_24h AS (
         SELECT DISTINCT ON (m.id)
           m.id as market_id,
-          o.close as price_24h_ago,
-          o.high as high_24h_start,
-          o.low as low_24h_start
+          o.open as first_price
         FROM ohlcv o
         JOIN markets m ON o.market_id = m.id
         WHERE o.timeframe = '1m'
           AND o.open_time >= NOW() - INTERVAL '24 hours'
-          AND o.open_time <= NOW() - INTERVAL '23.5 hours'
         ORDER BY m.id, o.open_time ASC
       ),
       stats_24h AS (
@@ -97,15 +95,15 @@ router.get('/prices', async (req: Request, res: Response) => {
         lp.price,
         lp.volume,
         CASE
-          WHEN p24.price_24h_ago IS NOT NULL
-          THEN ((lp.price - p24.price_24h_ago) / p24.price_24h_ago * 100)
+          WHEN fp.first_price IS NOT NULL AND fp.first_price > 0
+          THEN ((lp.price - fp.first_price) / fp.first_price * 100)
           ELSE 0
         END as change_24h,
         s24.high_24h,
         s24.low_24h,
         s24.volume_24h
       FROM latest_prices lp
-      LEFT JOIN prices_24h_ago p24 ON lp.market_id = p24.market_id
+      LEFT JOIN first_prices_24h fp ON lp.market_id = fp.market_id
       LEFT JOIN stats_24h s24 ON lp.market_id = s24.market_id
       ORDER BY lp.exchange, lp.symbol
     `);

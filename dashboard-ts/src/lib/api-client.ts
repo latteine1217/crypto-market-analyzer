@@ -9,7 +9,8 @@ import type {
   OpenInterest,
   RichListStat,
   Alert,
-  DataQualityMetrics
+  DataQualityMetrics,
+  NewsItem
 } from '@/types/market';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
@@ -60,6 +61,28 @@ export const fetchMarketPrices = async (): Promise<MarketPrice[]> => {
 
 export const fetchMarketQuality = async (): Promise<DataQualityMetrics[]> => {
   const response = await apiClient.get('/api/markets/quality');
+  return response.data.data;
+};
+
+// News API
+export const fetchNews = async (currency?: string): Promise<NewsItem[]> => {
+  const response = await apiClient.get<{ data: NewsItem[] }>('/news', {
+    params: { currency }
+  });
+  return response.data.data;
+};
+
+export interface OrderSizeData {
+  time: string;
+  price: number;
+  avg_order_size: number;
+  category: 'Big Whale' | 'Small Whale' | 'Normal' | 'Retail';
+}
+
+export const fetchOrderSizeAnalytics = async (exchange: string, symbol: string): Promise<OrderSizeData[]> => {
+  const response = await apiClient.get<{ data: OrderSizeData[] }>('/analytics/order-size', {
+    params: { exchange, symbol }
+  });
   return response.data.data;
 };
 
