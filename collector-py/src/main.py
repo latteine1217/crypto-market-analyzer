@@ -26,6 +26,7 @@ from tasks.derivative_tasks import run_funding_rate_task, run_open_interest_task
 from tasks.external_tasks import (
     run_news_task, 
     run_rich_list_task, 
+    run_whale_task,
     run_events_task,
     run_fear_greed_task,
     run_fred_task,
@@ -93,6 +94,7 @@ class ConfigDrivenCollector:
 
         # 資料收集任務
         scheduler.add_job(self.run_collection_cycle, 'interval', seconds=settings.collector_interval_seconds, id='ohlcv_collect')
+        scheduler.add_job(lambda: run_whale_task(self.orchestrator), 'interval', minutes=10, id='whale_collect')
         
         # 衍生品：每 5 分鐘抓取全市場數據（包含預測資金費率與 OI）
         scheduler.add_job(
@@ -152,6 +154,7 @@ def main():
     
     # 啟動前先執行一次關鍵任務
     collector.run_collection_cycle()
+    run_whale_task(collector.orchestrator)
     run_open_interest_task(collector.orchestrator, symbols)
     run_funding_rate_task(collector.orchestrator, symbols)
     collector.signal_monitor.scan()

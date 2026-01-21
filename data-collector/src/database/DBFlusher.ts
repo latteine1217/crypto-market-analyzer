@@ -78,28 +78,16 @@ export class DBFlusher {
     this.flushing = true;
 
     try {
-      let batches = 0;
-      let keepDraining = true;
-      const { batchSize, maxBatchesPerFlush } = this.flushConfig;
-
-      while (keepDraining && batches < maxBatchesPerFlush) {
-        const tradesFlushed = await this.flushTrades();
-        const orderbooksFlushed = await this.flushOrderBookSnapshots();
-        const klinesFlushed = await this.flushKlines();
-        const liquidationsFlushed = await this.flushLiquidations();
-
-        keepDraining =
-          tradesFlushed >= batchSize || 
-          orderbooksFlushed >= batchSize ||
-          klinesFlushed >= batchSize ||
-          liquidationsFlushed >= batchSize;
-        batches += 1;
-      }
+      // 分別處理各種類型的數據，互不干擾
+      try { await this.flushTrades(); } catch (e) { log.error('Trade flush failed', e); }
+      try { await this.flushOrderBookSnapshots(); } catch (e) { log.error('Orderbook flush failed', e); }
+      try { await this.flushKlines(); } catch (e) { log.error('Kline flush failed', e); }
+      try { await this.flushLiquidations(); } catch (e) { log.error('Liquidation flush failed', e); }
 
       this.stats.lastFlushTime = Date.now();
 
     } catch (error) {
-      log.error('Flush failed', error);
+      log.error('Global flush failed', error);
       this.stats.errorCount++;
     } finally {
       this.flushing = false;
@@ -324,59 +312,39 @@ export class DBFlusher {
       return 0;
     }
 
-    log.debug(`Flushing ${messages.length} liquidations`);
+    log.info(`💾 Flushing ${messages.length} liquidations to DB`);
 
     const client = await this.pool.connect();
 
     try {
       await client.query('BEGIN');
 
-      const rows: Array<[string, string, string, string, number, number, number]> = [];
-
+      let successCount = 0;
       for (const msg of messages) {
-        const liq = msg.data as any; // Using any to avoid TS mismatch if Liquidation type is not yet recognized globally
-        
+        const liq = msg.data as any;
         const valueUsd = liq.price * liq.quantity;
         
-        rows.push([
-          msg.exchange,
-          liq.symbol,
-          liq.side,
-          liq.price,
-          liq.quantity,
-          valueUsd,
-          liq.timestamp
-        ]);
+        try {
+          await client.query(
+            `INSERT INTO liquidations (time, exchange, symbol, side, price, quantity, value_usd)
+             VALUES (to_timestamp($1 / 1000.0), $2, $3, $4, $5, $6, $7)
+             ON CONFLICT DO NOTHING`,
+            [liq.timestamp, msg.exchange, liq.symbol, liq.side, liq.price, liq.quantity, valueUsd]
+          );
+          successCount++;
+        } catch (e) {
+          log.error(`Failed to insert single liquidation: ${liq.symbol}`, e);
+        }
       }
 
-      const values = rows
-        .map(
-          (_, i) => {
-            const base = i * 7;
-            // $1: exchange, $2: symbol, $3: side, $4: price, $5: quantity, $6: value_usd, $7: timestamp
-            return `(to_timestamp($${base + 7} / 1000.0), $${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6})`;
-          }
-        )
-        .join(', ');
-
-      await client.query(
-        `
-        INSERT INTO liquidations (
-          time, exchange, symbol, side, price, quantity, value_usd
-        )
-        VALUES ${values}
-        ON CONFLICT (time, exchange, symbol, side, price) DO NOTHING
-        `,
-        rows.flat()
-      );
-
       await client.query('COMMIT');
-      this.stats.totalFlushed += messages.length;
-      return messages.length;
+      this.stats.totalFlushed += successCount;
+      log.info(`✅ Successfully flushed ${successCount} liquidations`);
+      return successCount;
 
     } catch (error) {
       await client.query('ROLLBACK');
-      log.error('Failed to flush liquidations', error);
+      log.error('❌ Failed to flush liquidations batch', error);
       await this.queue.pushBatch(messages);
       throw error;
     } finally {

@@ -19,6 +19,7 @@ from connectors.bitinfocharts import BitInfoChartsClient
 from connectors.fear_greed_collector import FearGreedIndexCollector
 from connectors.fred_collector import FREDCollector
 from connectors.farside_etf_collector import FarsideInvestorsETFCollector
+from connectors.whale_collector import WhaleCollector
 from connectors.exchange_pool import ExchangePool
 from loaders.db_loader import DatabaseLoader
 from validators.data_validator import DataValidator
@@ -54,6 +55,7 @@ class CollectorOrchestrator:
         self.open_interest_collectors = {}
         self.news_collector = CryptoPanicCollector()
         self.rich_list_collector = BitInfoChartsClient()
+        self.whale_collector = WhaleCollector()
         
         # Phase 1: Macro Indicators Collectors
         self.fear_greed_collector = FearGreedIndexCollector()

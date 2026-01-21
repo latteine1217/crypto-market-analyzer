@@ -65,11 +65,12 @@ def run_rich_list_task(orchestrator):
                     cur.execute("INSERT INTO blockchains (name, native_token) VALUES ('BTC', 'BTC') RETURNING id")
                     blockchain_id = cur.fetchone()[0]
 
-                timestamp = datetime.now()
+                # 將時間戳對齊到小時，避免重複數據並方便時序分析
+                timestamp = datetime.now().replace(minute=0, second=0, microsecond=0)
                 for row in stats:
                     # 使用 V3 Schema 表名: address_tier_snapshots, 欄位: time
                     cur.execute("""
-                        INSERT INTO address_tier_snapshots 
+                        INSERT INTO address_tier_snapshots
                         (time, blockchain_id, tier_name, address_count, total_balance)
                         VALUES (%s, %s, %s, %s, %s)
                         ON CONFLICT (time, blockchain_id, tier_name) DO NOTHING
@@ -79,8 +80,16 @@ def run_rich_list_task(orchestrator):
     except Exception as e:
         logger.error(f"Rich list collection failed: {e}")
 
-def run_events_task(orchestrator):
-    """經濟與加密事件收集任務（FRED Economic Data + CoinMarketCal）"""
+def run_whale_task(orchestrator):
+    """鏈上大額轉帳 (Whale Transactions) 收集任務"""
+    try:
+        count = orchestrator.whale_collector.run_collection(orchestrator.db)
+        if count > 0:
+            logger.success(f"Collected {count} whale transactions from BTC Mempool")
+    except Exception as e:
+        logger.error(f"Whale collection failed: {e}")
+
+def run_events_task(orchestrator):    """經濟與加密事件收集任務（FRED Economic Data + CoinMarketCal）"""
     try:
         with orchestrator.db.get_connection() as conn:
             # 收集 FRED 經濟數據事件

@@ -167,12 +167,14 @@ export class BybitWSClient extends EventEmitter {
       if (this.config.streams.includes('kline_1m') || this.config.streams.includes('kline')) {
         args.push(`kline.1.${symbol}`);
       }
-
-      // 訂閱爆倉流 (僅限 Linear 市場)
-      if (isLinear && (this.config.streams.includes('liquidation') || this.config.streams.includes('trade'))) {
-        args.push(`liquidation.${symbol}`);
-      }
     });
+
+    // 爆倉流：如果是 Linear 市場，訂閱全市場爆倉 (V5 特色)
+    if (isLinear && (this.config.streams.includes('liquidation') || this.config.streams.includes('trade'))) {
+      // Bybit V5 支援直接訂閱該類別下的所有爆倉，極其強大
+      args.push('liquidation.USDT'); 
+      log.info('Subscribing to ALL USDT Linear liquidations');
+    }
 
     const subscribeMessage = {
       op: 'subscribe',
@@ -291,12 +293,14 @@ export class BybitWSClient extends EventEmitter {
     const symbol = topic.split('.')[1];
 
     trades.forEach(trade => {
+      const side = trade.S.toLowerCase(); // 'Buy' -> 'buy', 'Sell' -> 'sell'
       const tradeData: Trade = {
         symbol: symbol,
         price: parseFloat(trade.p),
         quantity: parseFloat(trade.v),
         timestamp: trade.T,
-        isBuyerMaker: trade.S === 'Sell', // Bybit: Sell = 賣單（主動賣出）
+        isBuyerMaker: trade.S === 'Sell',
+        side: side as 'buy' | 'sell',
         tradeId: trade.i
       };
 
