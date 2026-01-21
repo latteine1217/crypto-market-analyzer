@@ -55,7 +55,7 @@ FROM ohlcv;
 
 docker exec crypto_timescaledb psql -U crypto -d crypto_db -t -c "
 SELECT
-    '  最新資料時間: ' || MAX(open_time)
+    '  最新資料時間: ' || MAX(time)
 FROM ohlcv;
 " 2>/dev/null
 

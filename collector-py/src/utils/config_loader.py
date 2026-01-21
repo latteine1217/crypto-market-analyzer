@@ -137,19 +137,21 @@ def get_blockchain_config(blockchain: str, config: Dict[str, Any]) -> Dict[str, 
 
 
 if __name__ == '__main__':
+    from loguru import logger
+    
     # 測試配置載入
     config = load_whale_tracker_config()
 
-    print("=== 完整配置 ===")
-    print(f"API Keys: {config.get('api_keys', {})}")
-    print(f"Thresholds: {config.get('thresholds', {})}")
+    logger.info("=== 完整配置 ===")
+    logger.info(f"API Keys: {config.get('api_keys', {})}")
+    logger.info(f"Thresholds: {config.get('thresholds', {})}")
 
-    print("\n=== Ethereum 配置 ===")
+    logger.info("=== Ethereum 配置 ===")
     eth_config = get_blockchain_config('ETH', config)
     for key, value in eth_config.items():
-        print(f"{key}: {value}")
+        logger.info(f"{key}: {value}")
 
-    print("\n=== Bitcoin 配置 ===")
+    logger.info("=== Bitcoin 配置 ===")
     btc_config = get_blockchain_config('BTC', config)
     for key, value in btc_config.items():
-        print(f"{key}: {value}")
+        logger.info(f"{key}: {value}")

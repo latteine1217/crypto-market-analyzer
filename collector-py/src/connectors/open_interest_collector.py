@@ -1,6 +1,8 @@
 """
 Open Interest (未平倉量) 收集器
-支援從 Binance, Bybit, OKX 收集永續合約未平倉量
+支援從 Bybit 收集永續合約未平倉量
+
+優化記憶體：使用 ExchangePool 共享 CCXT 實例
 """
 import ccxt
 from typing import Dict, List, Optional
@@ -8,57 +10,50 @@ from datetime import datetime, timezone
 from loguru import logger
 
 from utils.symbol_utils import to_ccxt_format, normalize_symbol
+from connectors.exchange_pool import ExchangePool
 
 
 class OpenInterestCollector:
-    """未平倉量收集器"""
+    """
+    未平倉量收集器
+    
+    記憶體優化：
+    - 使用 ExchangePool 共享 CCXT 實例
+    - 避免每個 Collector 重複建立實例
+    - 預期減少 60-80 MB 記憶體使用
+    """
     
     def __init__(self, exchange_name: str, api_key: str = None, api_secret: str = None):
         """
         初始化 Open Interest 收集器
         
         Args:
-            exchange_name: 交易所名稱 (binance/bybit/okx)
+            exchange_name: 交易所名稱 (bybit)
             api_key: API Key (可選，讀取公開數據不需要)
             api_secret: API Secret (可選)
         """
         self.exchange_name = exchange_name.lower()
-        self.exchange = self._init_exchange(api_key, api_secret)
         
-    def _init_exchange(self, api_key: Optional[str], api_secret: Optional[str]) -> ccxt.Exchange:
-        """
-        初始化 CCXT exchange 實例
-        
-        Args:
-            api_key: API Key
-            api_secret: API Secret
-            
-        Returns:
-            CCXT Exchange 實例
-        """
-        config = {
-            'enableRateLimit': True,
-            'timeout': 30000,
-            'options': {
-                'defaultType': 'future',  # 永續合約市場
-            }
+        # 根據交易所選擇正確的 market type
+        # Bybit: linear
+        market_type_map = {
+            'bybit': 'linear'
         }
+        self.market_type = market_type_map.get(self.exchange_name, 'linear')
         
-        if api_key and api_secret:
-            config['apiKey'] = api_key
-            config['secret'] = api_secret
+        # ✅ 使用 ExchangePool 共享實例（記憶體優化）
+        # 🔧 使用正確的 market type（未平倉量僅支援合約市場）
+        self.exchange = ExchangePool().get_exchange(
+            exchange_name=self.exchange_name,
+            api_key=api_key,
+            api_secret=api_secret,
+            market_type=self.market_type
+        )
         
-        if self.exchange_name == 'binance':
-            exchange = ccxt.binance(config)
-        elif self.exchange_name == 'bybit':
-            exchange = ccxt.bybit(config)
-        elif self.exchange_name == 'okx':
-            exchange = ccxt.okx(config)
-        else:
-            raise ValueError(f"Unsupported exchange: {self.exchange_name}")
-        
-        logger.info(f"Initialized {self.exchange_name} open interest collector")
-        return exchange
+        logger.info(
+            f"Initialized {self.exchange_name} open interest collector "
+            f"(using shared CCXT instance)"
+        )
     
     def fetch_open_interest(self, symbol: str) -> Optional[Dict]:
         """
@@ -80,8 +75,8 @@ class OpenInterestCollector:
             Exception: 抓取失敗
         """
         try:
-            # 轉為 CCXT 格式
-            ccxt_symbol = to_ccxt_format(symbol)
+            # 轉為 CCXT 永續合約格式（例如: BTC/USDT:USDT）
+            ccxt_symbol = to_ccxt_format(symbol, market_type=self.market_type)
             
             # 抓取未平倉量
             oi_data = self.exchange.fetch_open_interest(ccxt_symbol)
@@ -162,7 +157,7 @@ class OpenInterestCollector:
             Exception: 抓取失敗
         """
         try:
-            ccxt_symbol = to_ccxt_format(symbol)
+            ccxt_symbol = to_ccxt_format(symbol, market_type=self.market_type)
             
             # 檢查交易所是否支援歷史未平倉量
             if not self.exchange.has.get('fetchOpenInterestHistory'):

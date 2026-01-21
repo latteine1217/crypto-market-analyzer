@@ -70,15 +70,21 @@ class BackfillScheduler:
                 'missing_count': int
             }]
         """
-        with self.conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT expected_time, has_data
-                FROM check_missing_candles(%s, %s, %s, %s)
-                """,
-                (market_id, timeframe, start_time, end_time)
-            )
-            results = cur.fetchall()
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT expected_time, has_data
+                    FROM check_missing_candles(%s, %s, %s, %s)
+                    """,
+                    (market_id, timeframe, start_time, end_time)
+                )
+                results = cur.fetchall()
+
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            logger.error(f"Database error checking data gaps: {e}")
+            return []
 
         # 解析缺失區段
         gaps = []
@@ -133,7 +139,7 @@ class BackfillScheduler:
         end_time: datetime,
         priority: int = 0,
         expected_records: Optional[int] = None
-    ) -> int:
+    ) -> Optional[int]:
         """
         建立補資料任務
 
@@ -147,29 +153,51 @@ class BackfillScheduler:
             expected_records: 預期記錄數
 
         Returns:
-            任務ID
+            任務ID（失敗時返回 None）
         """
-        with self.conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO backfill_tasks (
-                    market_id, data_type, timeframe,
-                    start_time, end_time, priority, expected_records
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO backfill_tasks (
+                        market_id, data_type, timeframe,
+                        start_time, end_time, priority, expected_records
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (market_id, data_type, timeframe, start_time, end_time,
+                     priority, expected_records)
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                RETURNING id
-                """,
-                (market_id, data_type, timeframe, start_time, end_time,
-                 priority, expected_records)
-            )
-            task_id = cur.fetchone()[0]
-            self.conn.commit()
+                task_id = cur.fetchone()[0]
+                self.conn.commit()
 
-        logger.info(
-            f"Created backfill task #{task_id}: "
-            f"market_id={market_id}, {data_type}, {start_time} - {end_time}"
-        )
-        return task_id
+            logger.info(
+                f"Created backfill task #{task_id}: "
+                f"market_id={market_id}, {data_type}, {start_time} - {end_time}"
+            )
+            return task_id
+
+        except psycopg2.errors.UndefinedTable as e:
+            # 表不存在時，優雅地處理（可能尚未執行 migration）
+            self.conn.rollback()
+            logger.warning(
+                f"backfill_tasks table does not exist, skipping task creation "
+                f"(run database migrations to enable this feature)"
+            )
+            return None
+
+        except psycopg2.Error as e:
+            # 其他資料庫錯誤
+            self.conn.rollback()
+            logger.error(f"Database error creating backfill task: {e}")
+            raise
+
+        except Exception as e:
+            # 未預期的錯誤
+            self.conn.rollback()
+            logger.error(f"Unexpected error creating backfill task: {e}")
+            raise
 
     def create_backfill_tasks_for_gaps(
         self,
@@ -205,7 +233,9 @@ class BackfillScheduler:
                 priority=priority,
                 expected_records=gap['missing_count']
             )
-            task_ids.append(task_id)
+            # task_id 可能為 None（表不存在時）
+            if task_id is not None:
+                task_ids.append(task_id)
 
         return task_ids
 
@@ -224,26 +254,38 @@ class BackfillScheduler:
         Returns:
             任務列表
         """
-        with self.conn.cursor() as cur:
-            query = """
-                SELECT
-                    id, market_id, data_type, timeframe,
-                    start_time, end_time, priority,
-                    retry_count, max_retries, expected_records
-                FROM backfill_tasks
-                WHERE status = 'pending'
-            """
+        try:
+            with self.conn.cursor() as cur:
+                query = """
+                    SELECT
+                        id, market_id, data_type, timeframe,
+                        start_time, end_time, priority,
+                        retry_count, max_retries, expected_records
+                    FROM backfill_tasks
+                    WHERE status = 'pending'
+                """
 
-            params = []
-            if data_type:
-                query += " AND data_type = %s"
-                params.append(data_type)
+                params = []
+                if data_type:
+                    query += " AND data_type = %s"
+                    params.append(data_type)
 
-            query += " ORDER BY priority DESC, created_at ASC LIMIT %s"
-            params.append(limit)
+                query += " ORDER BY priority DESC, created_at ASC LIMIT %s"
+                params.append(limit)
 
-            cur.execute(query, params)
-            rows = cur.fetchall()
+                cur.execute(query, params)
+                rows = cur.fetchall()
+
+        except psycopg2.errors.UndefinedTable:
+            # 表不存在時，返回空列表
+            self.conn.rollback()
+            logger.debug("backfill_tasks table does not exist, returning empty task list")
+            return []
+
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            logger.error(f"Database error fetching pending tasks: {e}")
+            return []
 
         tasks = []
         for row in rows:
@@ -278,49 +320,59 @@ class BackfillScheduler:
             actual_records: 實際獲取的記錄數（完成時提供）
             error_message: 錯誤訊息（失敗時提供）
         """
-        with self.conn.cursor() as cur:
-            if status == 'running':
-                cur.execute(
-                    """
-                    UPDATE backfill_tasks
-                    SET status = %s, started_at = NOW(), updated_at = NOW()
-                    WHERE id = %s
-                    """,
-                    (status, task_id)
-                )
-            elif status == 'completed':
-                cur.execute(
-                    """
-                    UPDATE backfill_tasks
-                    SET status = %s, completed_at = NOW(),
-                        actual_records = %s, updated_at = NOW()
-                    WHERE id = %s
-                    """,
-                    (status, actual_records, task_id)
-                )
-            elif status == 'failed':
-                cur.execute(
-                    """
-                    UPDATE backfill_tasks
-                    SET status = %s, error_message = %s,
-                        retry_count = retry_count + 1, updated_at = NOW()
-                    WHERE id = %s
-                    """,
-                    (status, error_message, task_id)
-                )
-            else:
-                cur.execute(
-                    """
-                    UPDATE backfill_tasks
-                    SET status = %s, updated_at = NOW()
-                    WHERE id = %s
-                    """,
-                    (status, task_id)
-                )
+        try:
+            with self.conn.cursor() as cur:
+                if status == 'running':
+                    cur.execute(
+                        """
+                        UPDATE backfill_tasks
+                        SET status = %s, started_at = NOW(), updated_at = NOW()
+                        WHERE id = %s
+                        """,
+                        (status, task_id)
+                    )
+                elif status == 'completed':
+                    cur.execute(
+                        """
+                        UPDATE backfill_tasks
+                        SET status = %s, completed_at = NOW(),
+                            actual_records = %s, updated_at = NOW()
+                        WHERE id = %s
+                        """,
+                        (status, actual_records, task_id)
+                    )
+                elif status == 'failed':
+                    cur.execute(
+                        """
+                        UPDATE backfill_tasks
+                        SET status = %s, error_message = %s,
+                            retry_count = retry_count + 1, updated_at = NOW()
+                        WHERE id = %s
+                        """,
+                        (status, error_message, task_id)
+                    )
+                else:
+                    cur.execute(
+                        """
+                        UPDATE backfill_tasks
+                        SET status = %s, updated_at = NOW()
+                        WHERE id = %s
+                        """,
+                        (status, task_id)
+                    )
 
-            self.conn.commit()
+                self.conn.commit()
 
-        logger.info(f"Task #{task_id} status updated to '{status}'")
+            logger.info(f"Task #{task_id} status updated to '{status}'")
+
+        except psycopg2.errors.UndefinedTable:
+            # 表不存在時，優雅地跳過
+            self.conn.rollback()
+            logger.debug("backfill_tasks table does not exist, skipping status update")
+
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            logger.error(f"Database error updating task status: {e}")
 
     def retry_failed_tasks(self, max_tasks: int = 5) -> List[int]:
         """
@@ -416,6 +468,7 @@ class BackfillScheduler:
 # 範例用法
 if __name__ == "__main__":
     from datetime import timezone
+    from loguru import logger
 
     scheduler = BackfillScheduler()
 
@@ -430,12 +483,12 @@ if __name__ == "__main__":
         market_id, timeframe, start, end
     )
 
-    print(f"Created {len(task_ids)} backfill tasks")
+    logger.info(f"Created {len(task_ids)} backfill tasks")
 
     # 查看待執行任務
     pending = scheduler.get_pending_tasks(limit=5)
-    print(f"\nPending tasks: {len(pending)}")
+    logger.info(f"Pending tasks: {len(pending)}")
     for task in pending:
-        print(f"  Task #{task['id']}: {task['start_time']} - {task['end_time']}")
+        logger.info(f"  Task #{task['id']}: {task['start_time']} - {task['end_time']}")
 
     scheduler.close()

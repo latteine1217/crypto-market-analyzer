@@ -5,10 +5,12 @@ import { useQuery } from '@tanstack/react-query'
 import { fetchLatestOrderbook, fetchMarkets, fetchOrderSizeAnalytics } from '@/lib/api-client'
 import { DepthChart } from '@/components/charts/DepthChart'
 import { OrderSizeChart } from '@/components/charts/OrderSizeChart'
+import { CVDChart } from '@/components/charts/CVDChart'
+import FundingRateHeatmap from '@/components/charts/FundingRateHeatmap'
 import type { OrderBookLevel } from '@/types/market'
 
 export default function LiquidityPage() {
-  const [exchange, setExchange] = useState('binance')
+  const [exchange, setExchange] = useState('bybit')
   const [symbol, setSymbol] = useState('BTCUSDT')
 
   const { data: markets } = useQuery({
@@ -89,9 +91,7 @@ export default function LiquidityPage() {
             onChange={(e) => setExchange(e.target.value)}
             className="bg-gray-800 border border-gray-700 rounded px-4 py-2"
           >
-            <option value="binance">Binance</option>
             <option value="bybit">Bybit</option>
-            <option value="okx">OKX</option>
           </select>
 
           <select
@@ -107,6 +107,8 @@ export default function LiquidityPage() {
           </select>
         </div>
       </div>
+
+      <FundingRateHeatmap />
 
       {isLoading && (
         <div className="space-y-6 animate-pulse">
@@ -154,11 +156,16 @@ export default function LiquidityPage() {
             </div>
           </div>
 
-          <div className="mt-6">
-            <OrderSizeChart data={orderSizeData || []} symbol={symbol} />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+            <div className="h-[400px]">
+               <CVDChart exchange={exchange} symbol={symbol} />
+            </div>
+            <div className="h-[400px]">
+               <OrderSizeChart data={orderSizeData || []} symbol={symbol} />
+            </div>
           </div>
 
-          <div className="card">
+          <div className="card mt-6">
             <h2 className="card-header">Order Book (Top 20)</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-6">
             {/* Bids (買單) */}

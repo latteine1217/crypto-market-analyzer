@@ -3,6 +3,26 @@ services:
   # 基礎設施服務
   # ============================================
 
+  # Nginx - 反向代理與統一入口
+  nginx:
+    image: nginx:alpine
+    container_name: crypto_nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+    depends_on:
+      - api-server
+      - dashboard-ts
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - crypto_network
+
   # TimescaleDB - 時序數據優化的PostgreSQL
   db:
     image: timescale/timescaledb:latest-pg16
@@ -12,7 +32,6 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-crypto_pass}
       POSTGRES_DB: ${POSTGRES_DB:-crypto_db}
       TZ: ${TZ:-Asia/Taipei}
-      # 防止長時間 idle in transaction 連接阻塞 retention jobs (Migration 010)
       POSTGRES_INITDB_ARGS: "-c idle_in_transaction_session_timeout=10min"
     command: 
       - "postgres"
@@ -22,14 +41,21 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
-      - ./database/schemas:/docker-entrypoint-initdb.d
-      - ./database/migrations:/migrations
+      # 自動執行初始化腳本（僅首次啟動或 volume 被刪除時）
+      - ./database/schemas:/docker-entrypoint-initdb.d:ro
+      - ./database/migrations:/migrations:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U crypto -d crypto_db"]
+      test: ["CMD-SHELL", "pg_isready -U crypto -d crypto_db && psql -U crypto -d crypto_db -tAc \"SELECT COUNT(*) FROM exchanges\" | grep -q '[0-9]'"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 30s
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - crypto_network
 
@@ -48,6 +74,11 @@ services:
       timeout: 3s
       retries: 5
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - crypto_network
 
@@ -72,14 +103,14 @@ services:
       - REDIS_DB=${REDIS_DB:-0}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - TZ=${TZ:-Asia/Taipei}
-      - BINANCE_API_KEY=${BINANCE_API_KEY:-}
-      - BINANCE_API_SECRET=${BINANCE_API_SECRET:-}
+      # Default to Bybit keys if generic keys are used
+      - BYBIT_API_KEY=${BYBIT_API_KEY:-}
+      - BYBIT_API_SECRET=${BYBIT_API_SECRET:-}
       - ETHERSCAN_API_KEY=${ETHERSCAN_API_KEY:-}
-      - BSCSCAN_API_KEY=${BSCSCAN_API_KEY:-}
       - CRYPTOPANIC_API_KEY=${CRYPTOPANIC_API_KEY:-}
+      - FRED_API_KEY=${FRED_API_KEY:-}
+      - COINMARKETCAL_API_KEY=${COINMARKETCAL_API_KEY:-}
       - COLLECTOR_CONFIG_DIR=/app/configs/collector
-    ports:
-      - "${COLLECTOR_METRICS_PORT:-8000}:8000"  # Prometheus metrics
     volumes:
       - ./collector-py/src:/app/src
       - ./collector-py/scripts:/app/scripts
@@ -92,46 +123,15 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - crypto_network
 
-  # Node.js WebSocket Collector - Binance
-  ws-collector-binance:
-    build:
-      context: .
-      dockerfile: data-collector/Dockerfile
-    container_name: crypto_ws_collector_binance
-    environment:
-      - POSTGRES_HOST=db
-      - POSTGRES_PORT=5432
-      - POSTGRES_DB=${POSTGRES_DB:-crypto_db}
-      - POSTGRES_USER=${POSTGRES_USER:-crypto}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-crypto_pass}
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_DB=${REDIS_DB:-0}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      - TZ=${TZ:-Asia/Taipei}
-      - EXCHANGE=binance
-      - SYMBOLS=${WS_SYMBOLS:-BTCUSDT,ETHUSDT}
-      - STREAMS=${WS_STREAMS:-trade,depth,kline_1m}
-      - METRICS_PORT=8004
-    ports:
-      - "8004:8004"
-    volumes:
-      - ./data-collector/src:/app/src
-      - ./data-collector/logs:/app/logs
-      - ./shared:/app/shared:ro
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
-    networks:
-      - crypto_network
-
-  # Node.js WebSocket Collector - Bybit
+  # Node.js WebSocket Collector - Bybit (Primary)
   ws-collector-bybit:
     build:
       context: .
@@ -151,9 +151,6 @@ services:
       - EXCHANGE=bybit
       - SYMBOLS=${WS_SYMBOLS:-BTCUSDT,ETHUSDT}
       - STREAMS=${WS_STREAMS:-trade,depth,kline_1m}
-      - METRICS_PORT=8002
-    ports:
-      - "8002:8002"
     volumes:
       - ./data-collector/src:/app/src
       - ./data-collector/logs:/app/logs
@@ -164,42 +161,11 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
-    networks:
-      - crypto_network
-
-  # Node.js WebSocket Collector - OKX
-  ws-collector-okx:
-    build:
-      context: .
-      dockerfile: data-collector/Dockerfile
-    container_name: crypto_ws_collector_okx
-    environment:
-      - POSTGRES_HOST=db
-      - POSTGRES_PORT=5432
-      - POSTGRES_DB=${POSTGRES_DB:-crypto_db}
-      - POSTGRES_USER=${POSTGRES_USER:-crypto}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-crypto_pass}
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_DB=${REDIS_DB:-0}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      - TZ=${TZ:-Asia/Taipei}
-      - EXCHANGE=okx
-      - SYMBOLS=${WS_SYMBOLS:-BTCUSDT,ETHUSDT}
-      - STREAMS=${WS_STREAMS:-trade,depth,kline_1m}
-      - METRICS_PORT=8003
-    ports:
-      - "8003:8003"
-    volumes:
-      - ./data-collector/src:/app/src
-      - ./data-collector/logs:/app/logs
-      - ./shared:/app/shared:ro
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - crypto_network
 
@@ -210,8 +176,8 @@ services:
   # TypeScript API Server - 新版 Backend API
   api-server:
     build:
-      context: ./api-server
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: api-server/Dockerfile
     container_name: crypto_api_server
     environment:
       - PORT=8080
@@ -226,7 +192,7 @@ services:
       - REDIS_DB=${REDIS_DB:-0}
       - CACHE_TTL=5
       - ENABLE_CACHE=true
-      - TZ=${TZ:-Asia/Taipei}
+      - TZ=UTC
     ports:
       - "8080:8080"
     depends_on:
@@ -235,6 +201,11 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - crypto_network
 
@@ -245,125 +216,22 @@ services:
       dockerfile: Dockerfile
     container_name: crypto_dashboard_ts
     environment:
-      # 在容器內使用 service name 訪問 API
-      - NEXT_PUBLIC_API_URL=http://api-server:8080
+      - NEXT_PUBLIC_API_URL=/api
       - PORT=3001
       - TZ=${TZ:-Asia/Taipei}
     ports:
       - "3001:3001"
+    volumes:
+      - ./dashboard-ts/src:/app/src
+      - ./dashboard-ts/public:/app/public
     depends_on:
       - api-server
     restart: unless-stopped
-    networks:
-      - crypto_network
-
-  # ============================================
-  # 監控服務
-  # ============================================
-
-  # Prometheus - 指標收集與告警
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: crypto_prometheus
-    ports:
-      - "${PROMETHEUS_PORT:-9090}:9090"
-    volumes:
-      - ./monitoring/prometheus:/etc/prometheus
-      - prometheus_data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
-      - '--storage.tsdb.retention.time=30d'
-      - '--web.enable-lifecycle'
-    restart: unless-stopped
-    networks:
-      - crypto_network
-
-  # Grafana - 視覺化監控面板
-  grafana:
-    image: grafana/grafana:latest
-    container_name: crypto_grafana
-    ports:
-      - "${GRAFANA_PORT:-3000}:3000"
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
-    environment:
-      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
-      - GF_INSTALL_PLUGINS=
-    depends_on:
-      - prometheus
-    restart: unless-stopped
-    networks:
-      - crypto_network
-
-  # Alertmanager - 告警管理
-  alertmanager:
-    image: prom/alertmanager:latest
-    container_name: crypto_alertmanager
-    ports:
-      - "${ALERTMANAGER_PORT:-9093}:9093"
-    volumes:
-      - ./monitoring/alertmanager:/etc/alertmanager
-      - alertmanager_data:/alertmanager
-    environment:
-      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
-      - SMTP_PORT=${SMTP_PORT:-587}
-      - SMTP_USER=${SMTP_USER:-}
-      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
-      - SMTP_FROM=${SMTP_FROM:-}
-      - ALERT_EMAIL_TO=${SMTP_TO:-}
-    entrypoint: /etc/alertmanager/entrypoint.sh
-    command:
-      - '--config.file=/etc/alertmanager/alertmanager.yml'
-      - '--storage.path=/alertmanager'
-    restart: unless-stopped
-    networks:
-      - crypto_network
-
-  # Node Exporter - 系統指標（macOS 兼容版本）
-  node-exporter:
-    image: prom/node-exporter:latest
-    container_name: crypto_node_exporter
-    ports:
-      - "9100:9100"
-    # macOS 不支持 rslave，使用簡化配置
-    # 提供基本的系統指標
-    pid: host
-    restart: unless-stopped
-    networks:
-      - crypto_network
-
-  # Postgres Exporter - PostgreSQL 指標
-  postgres-exporter:
-    image: prometheuscommunity/postgres-exporter:latest
-    container_name: crypto_postgres_exporter
-    ports:
-      - "9187:9187"
-    environment:
-      - DATA_SOURCE_NAME=postgresql://${POSTGRES_USER:-crypto}:${POSTGRES_PASSWORD:-crypto_pass}@db:5432/${POSTGRES_DB:-crypto_db}?sslmode=disable
-    depends_on:
-      db:
-        condition: service_healthy
-    restart: unless-stopped
-    networks:
-      - crypto_network
-
-  # Redis Exporter - Redis 指標
-  redis-exporter:
-    image: oliver006/redis_exporter:latest
-    container_name: crypto_redis_exporter
-    ports:
-      - "9121:9121"
-    environment:
-      - REDIS_ADDR=redis:6379
-    depends_on:
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - crypto_network
 
@@ -371,12 +239,6 @@ volumes:
   db_data:
     driver: local
   redis_data:
-    driver: local
-  prometheus_data:
-    driver: local
-  grafana_data:
-    driver: local
-  alertmanager_data:
     driver: local
 
 networks:

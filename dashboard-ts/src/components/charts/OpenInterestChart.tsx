@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useMemo } from 'react'
+import { useEffect, useRef } from 'react'
 import { 
   createChart, 
   ColorType, 
@@ -14,29 +14,28 @@ import type { OpenInterest } from '@/types/market'
 
 interface Props {
   data: OpenInterest[]
+  onChartCreate?: (chart: IChartApi) => void
+  key?: string 
 }
 
-export function OpenInterestChart({ data }: Props) {
+export function OpenInterestChart({ data, onChartCreate, key }: Props) {
   const chartContainerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
-  const seriesRef = useRef<ISeriesApi<'Area'> | null>(null)
+  const oiSeriesRef = useRef<any>(null) // 使用 any 確保 setMarkers 等方法可用
 
-  const stats = useMemo(() => {
-    if (!data || data.length === 0) return { latestUsd: 0, latestCoin: 0, change: 0 }
-    const first = data[0].open_interest_usd || 0
-    const last = data[data.length - 1].open_interest_usd || 0
-    const change = first ? ((last - first) / first * 100) : 0
-    return {
-      latestUsd: last / 1000000,
-      latestCoin: Number(data[data.length - 1].open_interest),
-      change
-    }
-  }, [data])
+  // 1. 準備統計數據
+  const latestData = data && data.length > 0 ? data[data.length - 1] : null;
+  const latestOI = latestData ? parseFloat(String(latestData.open_interest)) : 0;
+  const price = latestData ? parseFloat(String((latestData as any).price || 0)) : 0;
+  const latestOIUSD = (latestData && (latestData as any).open_interest_usd && Number((latestData as any).open_interest_usd) > 0) 
+    ? parseFloat(String((latestData as any).open_interest_usd)) 
+    : (latestOI * price);
 
   useEffect(() => {
     if (!chartContainerRef.current) return
 
-    const chart = createChart(chartContainerRef.current, {
+    // 2. 初始化圖表 (使用 any 繞過嚴格類型檢查)
+    const chartOptions: any = {
       layout: {
         background: { type: ColorType.Solid, color: '#111827' },
         textColor: '#9ca3af',
@@ -51,17 +50,32 @@ export function OpenInterestChart({ data }: Props) {
         borderColor: '#374151',
         timeVisible: true,
       },
-    })
+      rightPriceScale: {
+        visible: true,
+        borderColor: '#374151',
+        autoScale: true,
+      },
+    };
 
-    const series = chart.addSeries(AreaSeries, {
-      lineColor: '#8b5cf6',
-      topColor: 'rgba(139, 92, 246, 0.3)',
-      bottomColor: 'rgba(139, 92, 246, 0)',
+    const chart = createChart(chartContainerRef.current, chartOptions);
+
+    // 3. 建立序列
+    const oiSeries = chart.addSeries(AreaSeries, {
+      lineColor: '#a855f7', 
+      topColor: 'rgba(168, 85, 247, 0.4)',
+      bottomColor: 'rgba(168, 85, 247, 0.0)',
       lineWidth: 2,
+      priceFormat: { 
+        type: 'price', 
+        precision: 0,
+        minMove: 1,
+      },
+      title: 'OI',
     })
 
     chartRef.current = chart
-    seriesRef.current = series
+    oiSeriesRef.current = oiSeries
+    if (onChartCreate) onChartCreate(chart)
 
     const handleResize = () => {
       if (chartContainerRef.current && chartRef.current) {
@@ -76,42 +90,54 @@ export function OpenInterestChart({ data }: Props) {
         chartRef.current.remove()
         chartRef.current = null
       }
-      seriesRef.current = null
     }
-  }, [])
+  }, [key]) 
 
   useEffect(() => {
-    const series = seriesRef.current;
+    const series = oiSeriesRef.current;
     if (!series || !data || data.length === 0) return
 
-    const chartData: AreaData[] = data.map((d) => ({
-      time: Math.floor(new Date(d.timestamp).getTime() / 1000) as UTCTimestamp,
-      value: (d.open_interest_usd || 0) / 1000000,
-    }))
+    const chartData: AreaData[] = data
+      .filter(d => d.timestamp && d.open_interest != null)
+      .map((d) => ({
+        time: (Math.floor(new Date(d.timestamp).getTime() / 1000)) as UTCTimestamp,
+        value: parseFloat(String(d.open_interest)),
+      }))
+      .sort((a, b) => (a.time as number) - (b.time as number));
 
-    series.setData(chartData)
+    const uniqueData = chartData.filter((item, index, self) =>
+      index === self.findIndex((t) => t.time === item.time)
+    );
 
-    if (chartRef.current) {
-      chartRef.current.timeScale().fitContent()
+    if (uniqueData.length > 0) {
+      series.setData(uniqueData)
+      
+      requestAnimationFrame(() => {
+        if (chartRef.current) {
+          // 💡 強制讓時間軸適應內容
+          chartRef.current.timeScale().fitContent();
+          
+          // 💡 強制讓價格軸不包含 0 (透過 applyOptions 局部覆寫)
+          chartRef.current.priceScale('right').applyOptions({
+            autoScale: true,
+          } as any);
+        }
+      });
     }
   }, [data])
 
   return (
-    <div>
-      <div className="mb-4 flex items-center gap-6 text-sm">
-        <div>
-          <span className="text-gray-400">Latest OI (USD): </span>
-          <span className="font-semibold text-purple-400">${stats.latestUsd.toFixed(2)}M</span>
-        </div>
-        <div>
-          <span className="text-gray-400">Latest OI (Coin): </span>
-          <span className="font-semibold text-gray-300">{stats.latestCoin.toFixed(2)}</span>
-        </div>
-        <div>
-          <span className="text-gray-400">Trend: </span>
-          <span className={`font-semibold ${stats.change >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-            {stats.change > 0 ? '+' : ''}{stats.change.toFixed(2)}%
+    <div className="relative">
+      <div className="mb-4 flex items-center gap-6 text-xs font-mono">
+        <div className="flex gap-2">
+          <span className="text-gray-500">Latest OI (USD):</span>
+          <span className="text-purple-400 font-bold">
+            ${(latestOIUSD / 1e6).toFixed(2)}M
           </span>
+        </div>
+        <div className="flex gap-2">
+          <span className="text-gray-500">Latest OI (Coin):</span>
+          <span className="text-gray-200 font-bold">{latestOI.toLocaleString()}</span>
         </div>
       </div>
       <div ref={chartContainerRef} className="w-full" />

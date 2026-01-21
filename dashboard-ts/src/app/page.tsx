@@ -5,8 +5,10 @@ import { useQuery } from '@tanstack/react-query'
 import { fetchMarketPrices } from '@/lib/api-client'
 import { formatPrice, formatPercent, formatVolume } from '@/lib/utils'
 import Link from 'next/link'
-import { DataQualityStatus } from '@/components/DataQualityStatus'
 import { NewsList } from '@/components/NewsList'
+import { UpcomingEvents } from '@/components/UpcomingEvents'
+import { FearGreedWidget } from '@/components/FearGreedWidget'
+import { ETFFlowsWidget } from '@/components/ETFFlowsWidget'
 
 export default function HomePage() {
   const { data: prices, isLoading, error } = useQuery({
@@ -38,7 +40,16 @@ export default function HomePage() {
           <Link href="/liquidity" className="btn btn-secondary border-gray-700 hover:bg-gray-800">
             💧 Liquidity Analysis
           </Link>
+          <Link href="/status" className="btn btn-secondary border-gray-700 hover:bg-gray-800">
+            🔧 System Status
+          </Link>
         </div>
+      </div>
+
+      {/* Fear & Greed Index - Hero Section */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <FearGreedWidget />
+        <ETFFlowsWidget />
       </div>
 
       {/* Market Overview Section with Grouping */}
@@ -128,55 +139,8 @@ export default function HomePage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="card h-full bg-gradient-to-br from-gray-900 to-black border-gray-800/50">
-          <h3 className="card-header border-b border-gray-800/50">Network Status</h3>
-          <div className="p-6 grid grid-cols-2 gap-y-8 gap-x-4">
-            <div className="space-y-1">
-              <div className="text-[10px] uppercase tracking-widest text-gray-500">Ingestion</div>
-              <div className="flex items-center gap-2">
-                <span className="flex h-2 w-2 relative">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-success"></span>
-                </span>
-                <span className="text-lg font-bold text-gray-200">Active</span>
-              </div>
-            </div>
-            <div className="space-y-1">
-              <div className="text-[10px] uppercase tracking-widest text-gray-500">Exchanges</div>
-              <div className="text-lg font-bold text-gray-200">3 Nodes</div>
-            </div>
-            <div className="space-y-1">
-              <div className="text-[10px] uppercase tracking-widest text-gray-500">Live Streams</div>
-              <div className="text-lg font-bold text-gray-200">12 Channels</div>
-            </div>
-            <div className="space-y-1">
-              <div className="text-[10px] uppercase tracking-widest text-gray-500">Uptime</div>
-              <div className="text-lg font-bold text-success">99.98%</div>
-            </div>
-          </div>
-          
-          <div className="m-6 p-4 bg-primary/5 border border-primary/10 rounded-xl relative overflow-hidden group">
-            <div className="absolute top-0 right-0 p-2 opacity-10 group-hover:opacity-20 transition-opacity">
-              <svg className="w-12 h-12" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M12 2L1 21h22L12 2zm0 3.45l8.27 14.3H3.73L12 5.45zM11 16h2v2h-2v-2zm0-6h2v4h-2v-4z"/>
-              </svg>
-            </div>
-            <h4 className="text-xs font-bold text-primary mb-2 flex items-center gap-2">
-              <span className="w-1 h-3 bg-primary rounded-full"></span>
-              INFRASTRUCTURE NOTE
-            </h4>
-            <p className="text-[10px] text-gray-400 leading-relaxed max-w-[90%]">
-              Distributed WebSocket collectors are deployed per exchange. 
-              Subscribed to BTC/USDT and ETH/USDT streams for microsecond trade precision and full L2 order book depth.
-            </p>
-          </div>
-        </div>
-
-        <DataQualityStatus />
-      </div>
-
-      <div className="mt-6">
         <NewsList />
+        <UpcomingEvents />
       </div>
     </div>
   )

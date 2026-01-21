@@ -10,9 +10,6 @@
 # Etherscan API (Ethereum 主網)
 ETHERSCAN_API_KEY=ZRH3AV7J1N9XNJHBYCJJCGSRPFWTB9XXUZ
 
-# BscScan API (Binance Smart Chain)
-BSCSCAN_API_KEY=ZRH3AV7J1N9XNJHBYCJJCGSRPFWTB9XXUZ
-
 # TronScan API (Tron 主網) - 可選
 TRONSCAN_API_KEY=
 
@@ -27,7 +24,6 @@ BLOCKCHAIN_API_KEY=
 | 區塊鏈 | API 端點 | 狀態 |
 |--------|----------|------|
 | Ethereum | https://api.etherscan.io/api | ✅ 正常 |
-| BSC | https://api.bscscan.com/api | ✅ 正常 |
 | Bitcoin | https://blockchain.info | ✅ 正常 |
 
 ### 3. 程式碼修正
@@ -41,19 +37,7 @@ BLOCKCHAIN_API_KEY=
 
 ## ⚠️ 已知問題與解決方案
 
-### 1. BscScan API Key 問題
-
-**問題**: 測試顯示 BscScan API 返回 "NOTOK" 錯誤
-
-**原因**: BscScan 需要獨立的 API key,不能直接使用 Etherscan 的 key
-
-**解決方案**:
-1. 前往 https://bscscan.com/myapikey
-2. 使用你的 Etherscan 帳號登入 (同一團隊)
-3. 申請 BscScan 專屬的 API key
-4. 更新 `.env` 文件中的 `BSCSCAN_API_KEY`
-
-### 2. Etherscan API "NOTOK" 錯誤
+### 1. Etherscan API "NOTOK" 錯誤
 
 **可能原因**:
 1. API key 已達到免費版限制 (每秒 5 次請求)
@@ -105,7 +89,6 @@ python3 test_blockchain_apis.py
 | 測試項目 | 狀態 | 說明 |
 |---------|------|------|
 | Etherscan 配置 | ✅ | API URL 和 Key 已正確載入 |
-| BscScan 配置 | ✅ | API URL 和 Key 已正確載入 |
 | Bitcoin 配置 | ✅ | API URL 已正確載入 |
 | 價格查詢 | ⚠️ | 受 CoinGecko 免費限制影響 |
 | 交易查詢 | ⚠️ | 需要有效的 API key |
@@ -116,8 +99,7 @@ python3 test_blockchain_apis.py
 
 ### 必須完成
 1. ✅ 配置 Etherscan API key
-2. ⬜ 申請並配置 BscScan 獨立 API key
-3. ⬜ 驗證 Etherscan API key 有效性
+2. ⬜ 驗證 Etherscan API key 有效性
 
 ### 可選項目
 1. ⬜ 申請 TronScan API key (如需追蹤 TRON 鏈)
@@ -191,7 +173,6 @@ collection:
 ### 程式碼檔案
 - 配置載入: `collector-py/src/utils/config_loader.py`
 - Ethereum 追蹤器: `collector-py/src/connectors/ethereum_whale_tracker.py`
-- BSC 追蹤器: `collector-py/src/connectors/bsc_whale_tracker.py`
 - Bitcoin 追蹤器: `collector-py/src/connectors/bitcoin_whale_tracker.py`
 - 測試腳本: `collector-py/test_blockchain_apis.py`
 

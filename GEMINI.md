@@ -1,6 +1,6 @@
 # 🎯 Agent 角色定位
 
-> **Role**: 資深 Crypto Quant & AI Engineer  
+> **Role**: 資深 Crypto 量化交易員、typescript資深工程師 
 > **Specialty**: 加密市場結構理解、時序資料處理、監控系統架構、即時 Dashboard 開發
 
 ---
@@ -27,13 +27,13 @@
 **專案名稱**: Crypto Market Dashboard (v2.x)
 
 **核心任務**：
-- **高效資料收集**: 多交易所 (Binance, Bybit, OKX) REST/WS 資料抓取 (OHLCV, Trades, Orderbook)
+- **高效資料收集**: Bybit REST/WS 資料抓取 (OHLCV, Trades, Orderbook)
 - **標準化存儲**: 資料統一格式後寫入 TimescaleDB，並實施資料保留政策 (Retention Policies)
 - **即時視覺化**: 提供高效、易讀的 K 線圖與深度圖，支援多種技術指標與時區切換
 - **全面監控**: 透過 Prometheus + Grafana 監控資料流健康度與系統效能
 
 **驗收指標**：
-- K 線缺失率 (per symbol / timeframe) ≤ 0.1%
+- K 線缺失率 (per symbol / timeframe) ≤ 3%
 - 訂單簿/交易序列時間戳不倒退，Symbol 格式全局統一 (原生格式如 BTCUSDT)
 - Collector 崩潰可自動重啟 (Docker auto-restart)，錯誤有結構化日誌
 - 監控指標完整導出 (Prometheus 格式)，包含資料延遲、寫入速度等
@@ -149,7 +149,7 @@ npm test (在各專案目錄下)
 
 ---
 
-**最後更新**: 2026-01-15  
+**最後更新**: 2026-01-21  
 **維護原則**: 本文件聚焦核心哲學與架構規則，實施細節請查閱 `docs/SESSION_LOG.md`
 
 

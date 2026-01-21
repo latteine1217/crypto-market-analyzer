@@ -18,36 +18,12 @@ const TARGET_TIERS = [
   { id: '100+', label: '(100+) Coins', min: 100, max: Infinity },
 ]
 
-export function RichListTable({ data, demoMode = false }: Props) {
+export function RichListTable({ data }: Props) {
   // 處理數據邏輯
   const processedData = useMemo(() => {
-    // 如果是演示模式，生成假數據
-    if (demoMode || !data || data.length === 0) {
-      const dates = Array.from({ length: 5 }, (_, i) => {
-        const d = new Date()
-        d.setDate(d.getDate() - i)
-        return d.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' }) // 1/14
-      })
-
-      return {
-        dates,
-        rows: TARGET_TIERS.map(tier => {
-          // 生成隨機持倉量
-          const baseBalance = tier.id === '100+' ? 12000000 : tier.id === '10-100' ? 4300000 : 2000000
-          
-          // 生成每日變化
-          const changes = dates.map(() => {
-            const range = baseBalance * 0.001 // 0.1% 波動
-            return Math.floor((Math.random() - 0.5) * range)
-          })
-
-          return {
-            tier: tier.label,
-            totalHeld: baseBalance,
-            changes
-          }
-        })
-      }
+    // 檢查資料是否足夠
+    if (!data || data.length === 0) {
+      return { dates: [], rows: [] }
     }
 
     // --- 真實數據處理邏輯 ---
@@ -64,8 +40,9 @@ export function RichListTable({ data, demoMode = false }: Props) {
     // 排序日期 (新到舊)
     const sortedDates = Object.keys(groupedByDate).sort((a, b) => new Date(b).getTime() - new Date(a).getTime())
     
-    // 取最近 5 天 (或是更多，視 UI 空間而定)
-    const displayDates = sortedDates.slice(0, 5)
+    // 取最近 5 天，如果數據不足則取所有可用天數
+    // 最少需要 2 天才能計算變化
+    const displayDates = sortedDates.slice(0, Math.min(5, sortedDates.length))
     
     // 格式化日期標頭 (e.g., 1/14)
     const dateHeaders = displayDates.map(d => 
@@ -80,13 +57,16 @@ export function RichListTable({ data, demoMode = false }: Props) {
         
         // 篩選屬於該層級的 stats 並加總
         const total = dayStats.reduce((sum, stat) => {
-          // 解析 rank_group (e.g. "[100 - 1,000)")
+          // 解析 rank_group (e.g. "[100 - 1,000)" or "(0 - 0.00001)")
+          // 移除逗號，提取第一個數字作為範圍下限
           const clean = stat.rank_group.replace(/,/g, '')
-          const match = clean.match(/[\d.]+/)
-          const rangeMin = match ? parseFloat(match[0]) : 0
+          
+          // 匹配開頭的數字（整數或小數）
+          // 例如: "[100 - 1000)" -> 100, "(0 - 0.00001)" -> 0, "[1000 - 10000)" -> 1000
+          const match = clean.match(/^[\(\[](\d+(?:\.\d+)?)\s*-/)
+          const rangeMin = match ? parseFloat(match[1]) : 0
           
           // 判斷是否屬於當前目標層級
-          // 邏輯簡化：依據 rangeMin 判斷
           if (rangeMin >= tier.min && (tier.max === Infinity || rangeMin < tier.max)) {
             return sum + Number(stat.total_balance)
           }
@@ -126,7 +106,21 @@ export function RichListTable({ data, demoMode = false }: Props) {
       rows
     }
 
-  }, [data, demoMode])
+  }, [data])
+
+  if (processedData.rows.length === 0) {
+    return (
+      <div className="card border-gray-800/50 bg-gray-900/20 p-12 flex flex-col items-center justify-center text-center">
+        <div className="w-16 h-16 bg-gray-800 rounded-full flex items-center justify-center mb-4">
+          <span className="text-2xl">📊</span>
+        </div>
+        <h3 className="text-lg font-bold text-gray-300 mb-2">Insufficient History Data</h3>
+        <p className="text-gray-500 max-w-md">
+          Rich list data is collected daily. Please wait for the next scheduled update or run a backfill to see historical changes.
+        </p>
+      </div>
+    )
+  }
 
   return (
     <div className="overflow-x-auto">

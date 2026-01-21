@@ -124,6 +124,8 @@ export function setupLogger(config: LoggerConfig): winston.Logger {
   return logger;
 }
 
+import { config as sharedConfig } from '../config';
+
 /**
  * 獲取預設配置的 logger
  *
@@ -133,10 +135,8 @@ export function setupLogger(config: LoggerConfig): winston.Logger {
 export function getDefaultLogger(serviceName: string): winston.Logger {
   return setupLogger({
     serviceName,
-    logDir: process.env.LOG_DIR || 'logs',
-    level: process.env.LOG_LEVEL || 'info',
-    maxSize: process.env.LOG_MAX_SIZE || '500m',
-    maxFiles: process.env.LOG_MAX_FILES || '30d',
-    jsonFormat: process.env.LOG_JSON !== 'false',
+    logDir: 'logs',
+    level: sharedConfig.server.logLevel,
+    jsonFormat: true,
   });
 }

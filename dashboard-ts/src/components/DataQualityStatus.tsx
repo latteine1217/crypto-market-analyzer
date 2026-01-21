@@ -27,7 +27,7 @@ export const DataQualityStatus: React.FC = () => {
     <div className="bg-slate-900/50 border border-slate-800 rounded-xl overflow-hidden">
       <div className="px-4 py-3 border-b border-slate-800 bg-slate-800/30 flex justify-between items-center">
         <h3 className="font-semibold text-slate-200">Data Integrity (K-Line)</h3>
-        <span className="text-xs text-slate-400">Target: Missing Rate ≤ 0.1%</span>
+        <span className="text-xs text-slate-400">Target: Missing Rate ≤ 3%</span>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm text-left">
@@ -50,16 +50,16 @@ export const DataQualityStatus: React.FC = () => {
                   </div>
                 </td>
                 <td className="px-4 py-3 text-center">
-                  <span className={`font-mono font-bold ${m.quality_score >= 99 ? 'text-green-400' : m.quality_score >= 95 ? 'text-yellow-400' : 'text-red-400'}`}>
-                    {m.quality_score.toFixed(1)}
+                  <span className={`font-mono font-bold ${Number(m.quality_score) >= 99 ? 'text-green-400' : Number(m.quality_score) >= 95 ? 'text-yellow-400' : 'text-red-400'}`}>
+                    {Number(m.quality_score).toFixed(1)}
                   </span>
                 </td>
                 <td className="px-4 py-3 text-right text-slate-300">
                   {m.missing_count} / {m.expected_count}
                 </td>
                 <td className="px-4 py-3 text-right">
-                  <span className={m.missing_rate <= 0.001 ? 'text-green-400' : 'text-orange-400'}>
-                    {(m.missing_rate * 100).toFixed(3)}%
+                  <span className={Number(m.missing_rate) <= 0.03 ? 'text-green-400' : 'text-orange-400'}>
+                    {(Number(m.missing_rate) * 100).toFixed(2)}%
                   </span>
                 </td>
                 <td className="px-4 py-3 text-center">

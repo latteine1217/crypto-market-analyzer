@@ -61,23 +61,43 @@ def normalize_symbol(symbol: str) -> str:
     return symbol.replace('/', '')
 
 
-def to_ccxt_format(symbol: str) -> str:
+def to_ccxt_format(symbol: str, market_type: str = 'linear') -> str:
     """
-    標準化 symbol 為 CCXT 格式 (有斜線)
-    BTCUSDT → BTC/USDT
-    BTC/USDT → BTC/USDT
+    標準化 symbol 為 CCXT 格式
+    
+    Spot: BTCUSDT → BTC/USDT
+    Perpetual: BTCUSDT → BTC/USDT:USDT
     
     Args:
         symbol: 交易對符號
+        market_type: 市場類型 ('spot', 'future', 'swap', 'linear')
         
     Returns:
         標準化後的 symbol (CCXT 格式)
     """
-    if '/' in symbol:
+    # 如果已經是完整格式（包含 : 分隔符），直接返回
+    if ':' in symbol:
         return symbol
     
+    # 如果已經是 CCXT spot 格式
+    if '/' in symbol and ':' not in symbol:
+        # Spot market: 直接返回
+        if market_type == 'spot':
+            return symbol
+        # Perpetual market: 需要添加 settle currency
+        else:
+            base, quote = symbol.split('/')
+            return f"{base}/{quote}:{quote}"
+    
+    # 原生格式轉換
     base, quote = parse_symbol(symbol)
-    return f"{base}/{quote}"
+    
+    # Perpetual contracts: BTC/USDT:USDT
+    if market_type in ('future', 'swap', 'linear'):
+        return f"{base}/{quote}:{quote}"
+    # Spot: BTC/USDT
+    else:
+        return f"{base}/{quote}"
 
 
 def is_valid_symbol(symbol: str) -> bool:

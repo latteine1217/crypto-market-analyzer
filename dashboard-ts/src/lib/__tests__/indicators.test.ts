@@ -33,4 +33,21 @@ describe('Technical Indicators', () => {
     const rsi = calculateRSI(data, 14)
     expect(rsi[rsi.length - 1]).toBe(100) // avgLoss = 0 -> RSI = 100 (or handled as 50 depending on impl, my impl sets 100)
   })
+
+  test('calculateRSI calculates correct initial value', () => {
+    // Data: [0, 2, 1, 3, 2]
+    // Changes: +2, -1, +2, -1
+    // Period: 4
+    // Gains: 2, 0, 2, 0 -> Sum 4. Avg 1.
+    // Losses: 0, 1, 0, 1 -> Sum 2. Avg 0.5.
+    // RS = 1 / 0.5 = 2.
+    // RSI = 100 - (100 / (1 + 2)) = 66.67
+    
+    const data = [0, 2, 1, 3, 2]
+    const rsi = calculateRSI(data, 4)
+    const val = rsi[4]
+    
+    expect(val).not.toBeNull()
+    expect(val).toBeCloseTo(66.67, 1)
+  })
 })

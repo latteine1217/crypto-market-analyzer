@@ -1,38 +1,42 @@
 """
 Bybit REST API Connector
 替代 Binance 的交易所連接器
+
+優化記憶體：使用 ExchangePool 共享 CCXT 實例
 """
 import ccxt
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 from loguru import logger
 
+from connectors.exchange_pool import ExchangePool
+
 
 class BybitClient:
-    """Bybit REST API 客戶端"""
+    """
+    Bybit REST API 客戶端
+    
+    記憶體優化：
+    - 使用 ExchangePool 共享 CCXT 實例
+    - 避免重複建立實例與載入市場資訊
+    """
 
     def __init__(self, api_key: Optional[str] = None, api_secret: Optional[str] = None):
         """
-        初始化 Bybit 客戶端
+        初始化 Bybit 客戶端 (Linear Futures)
 
         Args:
             api_key: API Key（選用，僅讀取公開資料時不需要）
             api_secret: API Secret（選用）
         """
-        config = {
-            'enableRateLimit': True,
-            'timeout': 30000,
-            'options': {
-                'defaultType': 'spot',  # 使用現貨市場
-            }
-        }
-
-        if api_key and api_secret:
-            config['apiKey'] = api_key
-            config['secret'] = api_secret
-
-        self.exchange = ccxt.bybit(config)
-        logger.info(f"Bybit 客戶端初始化成功 (Rate Limit: {self.exchange.rateLimit}ms)")
+        # ✅ 使用 ExchangePool 共享實例（記憶體優化）
+        self.exchange = ExchangePool().get_exchange(
+            exchange_name='bybit',
+            api_key=api_key,
+            api_secret=api_secret,
+            market_type='linear'  # 使用 Linear 合約
+        )
+        logger.info(f"Bybit 客戶端初始化成功 (using shared CCXT instance, Rate Limit: {self.exchange.rateLimit}ms)")
 
     def fetch_ohlcv(
         self,
@@ -45,7 +49,7 @@ class BybitClient:
         獲取 OHLCV K 線資料
 
         Args:
-            symbol: 交易對 (例如: 'BTC/USDT')
+            symbol: 交易對 (例如: 'BTC/USDT:USDT')
             timeframe: 時間週期 ('1m', '5m', '15m', '1h', '4h', '1d')
             since: 起始時間戳（毫秒）
             limit: 返回筆數（最大 1000）
@@ -174,17 +178,17 @@ class BybitClient:
         return 'bybit'
 
     def get_markets(self) -> List[str]:
-        """獲取所有 USDT 交易對"""
+        """獲取所有 USDT 合約交易對"""
         try:
             markets = self.exchange.load_markets()
 
-            # 過濾出現貨 USDT 交易對
+            # 過濾出 Linear USDT 交易對
             usdt_markets = [
                 symbol for symbol in markets.keys()
-                if symbol.endswith('/USDT') and markets[symbol].get('spot', False)
+                if symbol.endswith('/USDT:USDT') or (symbol.endswith('/USDT') and markets[symbol].get('linear', False))
             ]
 
-            logger.info(f"✓ 找到 {len(usdt_markets)} 個 USDT 現貨交易對")
+            logger.info(f"✓ 找到 {len(usdt_markets)} 個 USDT 合約交易對")
             return sorted(usdt_markets)
 
         except Exception as e:
@@ -194,22 +198,24 @@ class BybitClient:
 
 # 測試範例
 if __name__ == "__main__":
+    from loguru import logger
+    
     client = BybitClient()
 
     # 測試獲取 K 線
-    print("\n測試獲取 BTC/USDT 1m K線...")
-    ohlcv = client.fetch_ohlcv('BTC/USDT', '1m', limit=5)
+    logger.info("測試獲取 BTC/USDT:USDT 1m K線...")
+    ohlcv = client.fetch_ohlcv('BTC/USDT:USDT', '1m', limit=5)
     for candle in ohlcv:
         timestamp = datetime.fromtimestamp(candle[0] / 1000)
-        print(f"{timestamp} | O:{candle[1]} H:{candle[2]} L:{candle[3]} C:{candle[4]} V:{candle[5]}")
+        logger.info(f"{timestamp} | O:{candle[1]} H:{candle[2]} L:{candle[3]} C:{candle[4]} V:{candle[5]}")
 
     # 測試獲取 ticker
-    print("\n測試獲取 ticker...")
-    ticker = client.fetch_ticker('BTC/USDT')
-    print(f"BTC/USDT: ${ticker['last']:,.2f}")
-    print(f"24h 變化: {ticker['percentage']:.2f}%")
+    logger.info("測試獲取 ticker...")
+    ticker = client.fetch_ticker('BTC/USDT:USDT')
+    logger.info(f"BTC/USDT: ${ticker['last']:,.2f}")
+    logger.info(f"24h 變化: {ticker['percentage']:.2f}%")
 
     # 測試獲取市場列表
-    print("\n測試獲取市場列表...")
+    logger.info("測試獲取市場列表...")
     markets = client.get_markets()
-    print(f"前 10 個交易對: {markets[:10]}")
+    logger.info(f"前 10 個交易對: {markets[:10]}")

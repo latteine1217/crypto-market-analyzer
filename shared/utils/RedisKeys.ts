@@ -7,10 +7,11 @@ export const REDIS_PREFIX = 'crypto:v2';
 export const RedisKeys = {
   /**
    * 獲取資料收集佇列的 Key
-   * 格式: crypto:v2:queue:{type}
+   * 格式: crypto:v2:queue:{exchange}:{type} 或 crypto:v2:queue:{type}
    */
-  getQueueKey(type: string): string {
-    return `${REDIS_PREFIX}:queue:${type}`;
+  getQueueKey(type: string, exchange: string = ''): string {
+    const exchangePart = exchange ? `${exchange.toLowerCase()}:` : '';
+    return `${REDIS_PREFIX}:queue:${exchangePart}${type}`;
   },
 
   /**

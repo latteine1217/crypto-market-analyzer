@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { logger } from '../utils/logger';
+import { APIError, ErrorType } from '../shared/errors/ErrorClassifier';
 
 export const errorHandler = (
   err: any,
@@ -7,18 +8,25 @@ export const errorHandler = (
   res: Response,
   next: NextFunction
 ) => {
+  const apiError = err instanceof APIError
+    ? err
+    : new APIError(
+        err.statusCode || 500,
+        ErrorType.UNKNOWN,
+        'INTERNAL_ERROR',
+        err.message || 'Internal Server Error',
+        false,
+        process.env.NODE_ENV === 'development' ? { stack: err.stack } : undefined
+      );
+
   logger.error('API Error', {
-    error: err.message,
-    stack: err.stack,
+    type: apiError.errorType,
+    code: apiError.errorCode,
+    message: apiError.message,
     path: req.path,
     method: req.method,
+    details: apiError.details
   });
 
-  const statusCode = err.statusCode || 500;
-  const message = err.message || 'Internal Server Error';
-
-  res.status(statusCode).json({
-    error: message,
-    timestamp: new Date().toISOString(),
-  });
+  res.status(apiError.statusCode).json(apiError.toJSON());
 };

@@ -1,42 +1,30 @@
 # Crypto Market Dashboard
 
-**Version**: v2.2.0  
-**Focus**: Performance Optimization + Robustness + Lightweight Visuals
+**Version**: v3.0.0 (Optimized V3 Architecture)
+**Focus**: High Efficiency + Minimalist Architecture + Data Consolidation
 
-以資料收集與可視化為核心的加密貨幣市場監控平台。從多交易所即時收集 OHLCV、Trades、OrderBook 資料，存入 TimescaleDB，透過 TypeScript Dashboard 提供高效、低延遲的技術分析介面。
+以 Bybit 交易所資料收集與可視化為核心的加密貨幣市場監控平台。從 Bybit 即時收集市場數據、衍生品指標與全球宏觀指標，透過 V3 優化架構整合存入 TimescaleDB，並提供流暢的 Next.js 分析介面。
 
 ## 🎯 核心特性
 
-### 🚀 效能優化 (v2.2+)
-- **高效指標算法**: 技術指標（RSI, Bollinger Bands 等）全面改用 $O(N)$ 滑動窗口演算法，大幅降低 CPU 消耗。
-- **API 減載技術**: 透過 React Query 智慧快取 (staleTime: 30s) 與視窗聚焦刷新控制，減少 80% 以上無謂的 API 請求。
-- **輕量化圖表**: 全面遷移至高性能 `lightweight-charts`，移除重型依賴 `recharts`，減少 Bundle Size 並提升渲染流暢度。
-- **渲染優化**: 實施 React.memo 與單次循環資料處理，確保大數據量下操作不卡頓。
+### 🚀 V3 架構優化 (v3.0+)
+- **資料高度整合**: 廢除碎片化表結構，將宏觀 (FRED)、情緒 (FearGreed)、ETF 數據統合成 `global_indicators` 泛用指標表。
+- **高效查詢**: 減少多表 Join，API 回傳延遲降低 50% 以上。
+- **系統精簡**: 移除重型監控棧 (Grafana/Prometheus)，系統資源消耗降低 60%，實現「輕量化運行」。
+- **TimescaleDB 壓縮**: 全面啟用列式壓縮與自動數據保留政策 (Retention Policies)。
 
 ### 📊 資料收集與管理
-- **多交易所支援**: Binance、Bybit、OKX (REST + WebSocket)。
-- **即時資料流**: WebSocket 串流 trades、orderbook、klines。
-- **歷史資料回補**: 自動補齊缺失區間。
-- **錯誤重試機制**: 智慧型 Rate limit 處理與斷線重連。
-
-### 📈 Dashboard 與可視化
-- **TypeScript Dashboard**: Next.js + Tailwind CSS 現代化介面。
-- **互動式圖表**: 全新 `Lightweight Charts` 整合，支援 K線、MACD、資金費率及持倉量。
-- **輕量深度圖**: 自研 SVG 高性能訂單簿深度視覺化。
-- **Loading 體驗**: 全面實施 Skeleton Screen 與流暢動畫，消除 Layout Shift。
-- **技術分析**: MA、EMA、RSI、MACD、Bollinger Bands。
-
-### 📡 監控與健壯性
-- **Error Boundary**: 全域錯誤捕捉與自動復原機制。
-- **單元測試**: 核心指標算法與 API Client 測試覆蓋。
-- **Prometheus/Grafana**: 50+ 收集器指標與預建監控面板。
+- **交易所支援**: Bybit (REST + WebSocket)。
+- **原生格式化**: Symbol 全面採用 `BTCUSDT` 格式，移除了陳舊的格式轉換邏輯。
+- **衍生品監控**: 即時追蹤 Funding Rate、Open Interest 及 Long/Short Ratio。
+- **全球指標**: 整合 FRED 美國經濟數據、恐懼貪婪指數與 BTC/ETH ETF 資金流向。
 
 ## 🏗️ 系統架構
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │                        Data Sources                           │
-│        Binance API    Bybit API    OKX API                   │
+│              Bybit API        FRED/SoSo                       │
 └────────────┬─────────────────────────────┬───────────────────┘
              │                             │
         REST API                      WebSocket
@@ -45,85 +33,78 @@
     ┌────────────────┐          ┌────────────────┐
     │ Python         │          │ TypeScript     │
     │ REST Collector │          │ WS Collector   │
-    │ (CCXT)         │          │ (Native)       │
     └────────┬───────┘          └────────┬───────┘
              │                           │
              │    ┌───────────────┐      │
-             └───▶│ Redis Queue   │◀─────┘
+             └───▶│ Redis Cache   │◀─────┘
                   └───────┬───────┘
                           │
                           ▼
                   ┌───────────────┐
                   │ TimescaleDB   │
-                  │ (Time-series) │
+                  │ (V3 Schema)   │
                   └───────┬───────┘
                           │
-              ┌───────────┼────────────────┐
-              ▼           ▼                ▼
-         ┌──────────┐ ┌──────────┐ ┌────────────┐
-         │API Server│ │ Grafana  │ │ Prometheus │
-         │(Express) │ │          │ │            │
-         └─────┬────┘ └──────────┘ └────────────┘
-               │      :3000         :9090
-               ▼
-         ┌──────────┐
-         │Dashboard │
-         │(Next.js) │
-         └──────────┘
-         :3001
+              ┌───────────┴────────────────┐
+              ▼                            ▼
+         ┌──────────┐                ┌──────────┐
+         │API Server│◀───────────────┤Dashboard │
+         │(Express) │                │(Next.js) │
+         └──────────┘                └──────────┘
+            :8080                        :3001
 ```
 
 ## 📁 專案結構
 
 ```
 crypto-market-dashboard/
-├── collector-py/              # Python REST API 收集器 (CCXT)
-├── data-collector/            # TypeScript WebSocket 收集器
-├── api-server/                # TypeScript API Server (Express)
-├── dashboard-ts/              # Next.js Dashboard (TypeScript) ✨ Optimized
-├── database/                  # Database schemas & migrations
-├── monitoring/                # Prometheus + Grafana + Alertmanager
-├── configs/                   # 收集器與系統配置
-├── scripts/                   # 運維與測試腳本
-└── docs/                      # 📚 專案文檔 (SESSION_LOG.md, TECH_DEBT.md)
+├── collector-py/              # Python REST API 收集器 (宏觀、情緒、指標)
+├── data-collector/            # TypeScript WebSocket 收集器 (價格、成交)
+├── api-server/                # TypeScript API Server (後端資料匯聚)
+├── dashboard-ts/              # Next.js Dashboard (現代化前端介面)
+├── database/                  # 📚 V3 優化 Schema 與 Migrations
+├── shared/                    # 共享工具與類型定義 (TS/Py)
+├── scripts/                   # 核心維運工具 (狀態檢查、資料驗證)
+└── docs/                      # 📚 開發日誌、技術債與專案報告
 ```
 
 ## 🚀 快速開始
 
 ### 前置需求
 - Docker & Docker Compose
-- 可用端口: 5432, 6379, 8000, 8001, 8080, 3001, 3000, 9090
+- 可用端口: 80, 5432, 6379, 8080, 3001
 
 ### 1. 啟動服務
 
 ```bash
-# 複製環境變數範本並設定
+# 複製環境變數範本
 cp .env.example .env
 
-# 啟動完整堆疊
+# 啟動系統 (自動執行 V3 初始化)
 docker-compose up -d
 ```
 
-### 2. 訪問介面
-
-| 服務 | URL | 預設帳號 |
-|------|-----|----------|
-| 📊 **Dashboard** | http://localhost:3001 | - |
-| 🔌 **API Server** | http://localhost:8080 | - |
-| 📈 **Grafana** | http://localhost:3000 | admin / admin |
-
-## 🧪 效能測試與驗證
+### 2. 管理命令 (Makefile)
 
 ```bash
-# 執行指標單元測試
-cd dashboard-ts && npm test
+make status             # 查看服務狀態
+make logs-collector     # 查看收集器日誌
+make db-shell           # 進入資料庫 Psql
+make db-check-rich-list # 檢查巨鯨數據
+```
 
-# 驗證資料收集狀態
+## 🧪 驗證與運維
+
+```bash
+# 驗證資料收集完整性
+python scripts/verify_data.py
+
+# 檢查各交易所最新 K 線時間
 ./scripts/collector_status.sh
 ```
 
 ---
 
-**最後更新**: 2026-01-15  
-**專案版本**: v2.2.0  
+**最後更新**: 2026-01-16  
+**專案版本**: v3.0.0  
 **維護者**: Development Team

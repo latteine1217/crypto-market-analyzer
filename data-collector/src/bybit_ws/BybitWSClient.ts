@@ -116,8 +116,11 @@ export class BybitWSClient extends EventEmitter {
    * 建立 WebSocket URL
    */
   private buildWebSocketURL(): string {
-    // Bybit V5 公開 WebSocket 端點
-    return 'wss://stream.bybit.com/v5/public/spot';
+    // 根據 symbols 判斷使用 spot 還是 linear (這是一個簡化的邏輯)
+    // 更好的做法是在 WSConfig 中明確指定 market_type
+    const isLinear = this.config.symbols.some(s => s.toLowerCase().includes('usdt'));
+    const category = isLinear ? 'linear' : 'spot';
+    return `wss://stream.bybit.com/v5/public/${category}`;
   }
 
   /**
@@ -127,7 +130,7 @@ export class BybitWSClient extends EventEmitter {
     this.state = ConnectionState.CONNECTED;
     this.reconnectAttempts = 0;
 
-    log.info('✅ Connected to Bybit WebSocket');
+    log.info('✅ Connected to Bybit WebSocket', { url: this.buildWebSocketURL() });
 
     // 訂閱交易流和訂單簿
     this.subscribe();
@@ -139,7 +142,7 @@ export class BybitWSClient extends EventEmitter {
   }
 
   /**
-   * 訂閱交易流和訂單簿
+   * 訂閱交易流、訂單簿和爆倉
    */
   private subscribe(): void {
     if (!this.ws || this.state !== ConnectionState.CONNECTED) {
@@ -147,6 +150,7 @@ export class BybitWSClient extends EventEmitter {
     }
 
     const args: string[] = [];
+    const isLinear = this.buildWebSocketURL().includes('linear');
 
     this.config.symbols.forEach(symbol => {
       // 訂閱交易流
@@ -154,14 +158,19 @@ export class BybitWSClient extends EventEmitter {
         args.push(`publicTrade.${symbol}`);
       }
 
-      // 訂閱訂單簿（50 檔）
+      // 訂閱訂單簿（200 檔）
       if (this.config.streams.includes('depth')) {
-        args.push(`orderbook.50.${symbol}`);
+        args.push(`orderbook.200.${symbol}`);
       }
 
-      // 訂閱 K線（1分鐘）
+      // 訂閱 K線
       if (this.config.streams.includes('kline_1m') || this.config.streams.includes('kline')) {
         args.push(`kline.1.${symbol}`);
+      }
+
+      // 訂閱爆倉流 (僅限 Linear 市場)
+      if (isLinear && (this.config.streams.includes('liquidation') || this.config.streams.includes('trade'))) {
+        args.push(`liquidation.${symbol}`);
       }
     });
 
@@ -238,6 +247,41 @@ export class BybitWSClient extends EventEmitter {
     else if (topic.startsWith('kline.')) {
       this.handleKline(data, topic);
     }
+    // 處理爆倉數據
+    else if (topic.startsWith('liquidation.')) {
+      this.handleLiquidation(data, topic);
+    }
+  }
+
+  /**
+   * 處理爆倉數據
+   */
+  private handleLiquidation(data: any, topic: string): void {
+    const symbol = topic.split('.')[1];
+
+    // Bybit 爆倉數據格式: { symbol, side, price, size, updatedTime }
+    const liquidation: any = {
+      symbol: symbol,
+      side: data.side === 'Buy' ? 'buy' : 'sell', // Buy = 空單爆倉(強制買入)
+      price: parseFloat(data.price),
+      quantity: parseFloat(data.size),
+      timestamp: parseInt(data.updatedTime)
+    };
+
+    const queueMessage: QueueMessage = {
+      type: MessageType.LIQUIDATION,
+      exchange: 'bybit',
+      data: liquidation,
+      receivedAt: Date.now()
+    };
+
+    this.emit('message', queueMessage);
+
+    // 更新統計
+    const count = this.stats.messagesByType.get(MessageType.LIQUIDATION) || 0;
+    this.stats.messagesByType.set(MessageType.LIQUIDATION, count + 1);
+    
+    log.debug('🔥 Liquidation detected', { symbol, side: liquidation.side, value: liquidation.price * liquidation.quantity });
   }
 
   /**

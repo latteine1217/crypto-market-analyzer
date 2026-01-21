@@ -165,7 +165,7 @@ class TestMarketOperations:
             (100,)  # market_id
         ]
         
-        market_id = db.get_market_id('binance', 'BTCUSDT')
+        market_id = db.get_market_id('bybit', 'BTCUSDT')
         
         assert market_id == 100
         assert cursor.execute.call_count >= 2
@@ -185,7 +185,7 @@ class TestMarketOperations:
             (200,)  # 新建立的 market_id
         ]
         
-        market_id = db.get_market_id('binance', 'ETHUSDT')
+        market_id = db.get_market_id('bybit', 'ETHUSDT')
         
         assert market_id == 200
         # 驗證有執行 INSERT
@@ -279,7 +279,7 @@ class TestErrorHandling:
         cursor.execute.side_effect = psycopg2.DatabaseError("Query failed")
         
         with pytest.raises(psycopg2.DatabaseError):
-            db.get_market_id('binance', 'BTCUSDT')
+            db.get_market_id('bybit', 'BTCUSDT')
     
     def test_handles_connection_timeout(self, mock_connection_pool):
         """測試處理連接超時"""
@@ -312,7 +312,7 @@ class TestSymbolParsing:
         cursor.fetchone.side_effect = [(1,), (100,)]
         
         # 使用斜線格式符號
-        market_id = db.get_market_id('binance', 'BTC/USDT')
+        market_id = db.get_market_id('bybit', 'BTC/USDT')
         
         # 驗證實際查詢時使用標準化格式
         calls = cursor.execute.call_args_list

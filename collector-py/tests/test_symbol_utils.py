@@ -64,8 +64,8 @@ class TestParseSymbol:
         test_cases = [
             ('SOL/USDT', 'SOL', 'USDT'),
             ('SOLUSDT', 'SOL', 'USDT'),
-            ('BNB/BUSD', 'BNB', 'BUSD'),
-            ('BNBBUSD', 'BNB', 'BUSD'),
+            ('SOL/USDC', 'SOL', 'USDC'),
+            ('SOLUSDC', 'SOL', 'USDC'),
             ('LINK/ETH', 'LINK', 'ETH'),
             ('LINKETH', 'LINK', 'ETH'),
         ]
@@ -109,7 +109,7 @@ class TestToCcxtFormat:
     def test_various_quotes(self):
         """測試各種 quote asset"""
         assert to_ccxt_format('ETHUSDC') == 'ETH/USDC'
-        assert to_ccxt_format('BNBBUSD') == 'BNB/BUSD'
+        assert to_ccxt_format('SOLUSDC') == 'SOL/USDC'
         assert to_ccxt_format('LINKETH') == 'LINK/ETH'
 
 

@@ -21,9 +21,17 @@ class Settings(BaseSettings):
     redis_port: int = Field(default=6379, alias="REDIS_PORT")
     redis_db: int = Field(default=0, alias="REDIS_DB")
 
-    # Binance API (可選)
+    # Bybit API (Primary)
+    bybit_api_key: str = Field(default="", alias="BYBIT_API_KEY")
+    bybit_api_secret: str = Field(default="", alias="BYBIT_API_SECRET")
+
+    # Binance API (Secondary)
     binance_api_key: str = Field(default="", alias="BINANCE_API_KEY")
     binance_api_secret: str = Field(default="", alias="BINANCE_API_SECRET")
+
+    # External APIs (Phase 1: Macro Indicators)
+    fred_api_key: str = Field(default="", alias="FRED_API_KEY")
+    cryptopanic_api_key: str = Field(default="", alias="CRYPTOPANIC_API_KEY")
 
     # Collector
     collector_interval_seconds: int = Field(default=60, alias="COLLECTOR_INTERVAL_SECONDS")

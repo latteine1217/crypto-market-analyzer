@@ -212,8 +212,8 @@ class DataQualityChecker:
                     'message': 'Abnormal volume spikes detected'
                 })
 
-        # 決定是否建立補資料任務（當缺失率超過 0.1% 時）
-        should_create_backfill = create_backfill_tasks and missing_rate > 0.001
+        # 決定是否建立補資料任務（當缺失率超過 3% 時）
+        should_create_backfill = create_backfill_tasks and missing_rate > 0.03
         
         if should_create_backfill:
             self._create_backfill_tasks_from_validation(
@@ -320,14 +320,14 @@ class DataQualityChecker:
                 cur.execute(
                     """
                     SELECT
-                        EXTRACT(EPOCH FROM open_time) * 1000,
+                        EXTRACT(EPOCH FROM time) * 1000,
                         open, high, low, close, volume
                     FROM ohlcv
                     WHERE market_id = %s
                       AND timeframe = %s
-                      AND open_time >= %s
-                      AND open_time < %s
-                    ORDER BY open_time ASC
+                      AND time >= %s
+                      AND time < %s
+                    ORDER BY time ASC
                     """,
                     (market_id, timeframe, start_time, end_time)
                 )
@@ -358,24 +358,24 @@ class DataQualityChecker:
         query = f"""
             WITH ordered AS (
                 SELECT
-                    open_time,
-                    LAG(open_time) OVER (ORDER BY open_time) AS prev_time
+                    time,
+                    LAG(time) OVER (ORDER BY time) AS prev_time
                 FROM ohlcv
                 WHERE market_id = %s
                   AND timeframe = %s
-                  AND open_time >= %s
-                  AND open_time < %s
+                  AND time >= %s
+                  AND time < %s
             )
             SELECT
                 prev_time AS start_time,
-                open_time AS end_time,
-                (EXTRACT(EPOCH FROM (open_time - prev_time))
+                time AS end_time,
+                (EXTRACT(EPOCH FROM (time - prev_time))
                  / EXTRACT(EPOCH FROM INTERVAL '{interval_literal}'))::int - 1
                  AS missing_count,
-                (open_time - prev_time) AS actual_interval
+                (time - prev_time) AS actual_interval
             FROM ordered
             WHERE prev_time IS NOT NULL
-              AND open_time - prev_time > INTERVAL '{interval_literal}' * 1.5
+              AND time - prev_time > INTERVAL '{interval_literal}' * 1.5
             ORDER BY start_time
         """
 
@@ -416,14 +416,14 @@ class DataQualityChecker:
                 cur.execute(
                     """
                     SELECT
-                        EXTRACT(EPOCH FROM open_time) * 1000,
+                        EXTRACT(EPOCH FROM time) * 1000,
                         open, high, low, close, volume
                     FROM ohlcv
                     WHERE market_id = %s
                       AND timeframe = %s
-                      AND open_time >= %s
-                      AND open_time < %s
-                    ORDER BY open_time ASC
+                      AND time >= %s
+                      AND time < %s
+                    ORDER BY time ASC
                     """,
                     (market_id, timeframe, start_time, end_time)
                 )
@@ -533,7 +533,7 @@ class DataQualityChecker:
         hours: int = 24
     ) -> Dict:
         """
-        生成品質報告
+        生成品質報告 (V3 Schema: 從 system_logs 讀取)
 
         Args:
             market_id: 市場ID（可選，None 表示所有市場）
@@ -544,42 +544,30 @@ class DataQualityChecker:
         """
         with self.db.get_connection() as conn:
             with conn.cursor() as cur:
+                # 從 system_logs 中提取 LEVEL='QUALITY' 的記錄
+                # 並從 metadata JSONB 中提取數值
+                query = """
+                    SELECT
+                        AVG(value) AS avg_score,
+                        MIN(value) AS min_score,
+                        MAX(value) AS max_score,
+                        COUNT(*) AS total_checks,
+                        SUM(CASE WHEN (metadata->>'missing_rate')::numeric > 0.05 THEN 1 ELSE 0 END) AS failed_checks,
+                        SUM((metadata->>'missing_count')::numeric) AS total_missing,
+                        0 AS total_out_of_order, -- V3 簡化，暫不追蹤
+                        0 AS total_price_jumps   -- V3 簡化，暫不追蹤
+                    FROM system_logs
+                    WHERE level = 'QUALITY'
+                      AND module = 'collector'
+                      AND time >= NOW() - INTERVAL '%s hours'
+                """
+                
+                params = [hours]
                 if market_id:
-                    cur.execute(
-                        """
-                        SELECT
-                            AVG(quality_score) AS avg_score,
-                            MIN(quality_score) AS min_score,
-                            MAX(quality_score) AS max_score,
-                            COUNT(*) AS total_checks,
-                            SUM(CASE WHEN is_valid = FALSE THEN 1 ELSE 0 END) AS failed_checks,
-                            SUM(missing_count) AS total_missing,
-                            SUM(out_of_order_count) AS total_out_of_order,
-                            SUM(price_jump_count) AS total_price_jumps
-                        FROM data_quality_summary
-                        WHERE market_id = %s
-                          AND check_time >= NOW() - INTERVAL '%s hours'
-                        """,
-                        (market_id, hours)
-                    )
-                else:
-                    cur.execute(
-                        """
-                        SELECT
-                            AVG(quality_score) AS avg_score,
-                            MIN(quality_score) AS min_score,
-                            MAX(quality_score) AS max_score,
-                            COUNT(*) AS total_checks,
-                            SUM(CASE WHEN is_valid = FALSE THEN 1 ELSE 0 END) AS failed_checks,
-                            SUM(missing_count) AS total_missing,
-                            SUM(out_of_order_count) AS total_out_of_order,
-                            SUM(price_jump_count) AS total_price_jumps
-                        FROM data_quality_summary
-                        WHERE check_time >= NOW() - INTERVAL '%s hours'
-                        """,
-                        (hours,)
-                    )
+                    query += " AND (metadata->>'market_id')::int = %s"
+                    params.append(market_id)
 
+                cur.execute(query, tuple(params))
                 row = cur.fetchone()
 
         return {
@@ -613,18 +601,18 @@ if __name__ == "__main__":
         create_backfill_tasks=True
     )
 
-    print(f"Quality check result:")
-    print(f"  Total records: {result['total_records']}")
-    print(f"  Valid: {result['valid']}")
-    print(f"  Errors: {len(result['errors'])}")
-    print(f"  Warnings: {len(result['warnings'])}")
+    logger.info("Quality check result:")
+    logger.info(f"  Total records: {result['total_records']}")
+    logger.info(f"  Valid: {result['valid']}")
+    logger.info(f"  Errors: {len(result['errors'])}")
+    logger.info(f"  Warnings: {len(result['warnings'])}")
 
     # 生成品質報告
     report = checker.generate_quality_report(market_id=1, hours=24)
-    print(f"\nQuality report (last 24h):")
-    print(f"  Average score: {report['avg_score']:.2f}")
-    print(f"  Total checks: {report['total_checks']}")
-    print(f"  Failed checks: {report['failed_checks']}")
-    print(f"  Total missing: {report['total_missing']}")
+    logger.info("Quality report (last 24h):")
+    logger.info(f"  Average score: {report['avg_score']:.2f}")
+    logger.info(f"  Total checks: {report['total_checks']}")
+    logger.info(f"  Failed checks: {report['failed_checks']}")
+    logger.info(f"  Total missing: {report['total_missing']}")
 
     checker.close()

@@ -11,10 +11,6 @@ export default function OnChainPage() {
     refetchInterval: 1000 * 60 * 60, // Refresh every hour
   })
 
-  // 簡單判斷：如果數據量太少（例如剛初始化），啟用 demo 模式展示 UI
-  // 在實際生產環境中，應移除 demoMode 或僅在開發環境啟用
-  const showDemo = !isLoading && (!richList || richList.length < 24); // 假設一天至少有幾筆數據，或者根據日期數判斷
-
   return (
     <div className="space-y-6">
       <div>
@@ -27,8 +23,7 @@ export default function OnChainPage() {
           <div className="p-6 pb-0">
             <h2 className="card-header">Bitcoin Rich List Changes</h2>
             <p className="text-sm text-gray-500 mb-6">
-              Daily balance changes across different address tiers. 
-              {showDemo && <span className="text-yellow-500 ml-2">(Displaying Demo Data - Insufficient History)</span>}
+              Daily balance changes across different address tiers.
             </p>
           </div>
           
@@ -43,7 +38,7 @@ export default function OnChainPage() {
                 </div>
               </div>
             ) : (
-              <RichListTable data={richList || []} demoMode={showDemo} />
+              <RichListTable data={richList || []} />
             )}
           </div>
         </div>

@@ -1,82 +1,68 @@
 /**
  * 配置管理
- * 從環境變數載入配置
+ * 封裝 ./shared/config 並維持相容性
  */
-import * as dotenv from 'dotenv';
+import { config as sharedConfig } from '../shared/config';
 import { DBConfig, RedisConfig, FlushConfig } from '../types';
-
-dotenv.config();
 
 export const config = {
   // 交易所名稱
-  exchange: process.env.EXCHANGE || 'binance',
+  exchange: sharedConfig.collector.exchange,
 
   // Redis 配置
   redis: {
-    host: process.env.REDIS_HOST || 'localhost',
-    port: parseInt(process.env.REDIS_PORT || '6379'),
-    password: process.env.REDIS_PASSWORD,
-    db: parseInt(process.env.REDIS_DB || '0')
+    host: sharedConfig.redis.host,
+    port: sharedConfig.redis.port,
+    password: sharedConfig.redis.password,
+    db: sharedConfig.redis.db
   } as RedisConfig,
 
   // TimescaleDB 配置
   database: {
-    host: process.env.POSTGRES_HOST || 'localhost',
-    port: parseInt(process.env.POSTGRES_PORT || '5432'),
-    database: process.env.POSTGRES_DB || 'crypto_db',
-    user: process.env.POSTGRES_USER || 'crypto',
-    password: process.env.POSTGRES_PASSWORD || 'crypto_pass'
+    host: sharedConfig.database.host,
+    port: sharedConfig.database.port,
+    database: sharedConfig.database.database,
+    user: sharedConfig.database.user,
+    password: sharedConfig.database.password
   } as DBConfig,
 
   // Flush 配置
   flush: {
-    batchSize: parseInt(process.env.FLUSH_BATCH_SIZE || '100'),
-    intervalMs: parseInt(process.env.FLUSH_INTERVAL_MS || '5000'),
-    maxRetries: parseInt(process.env.FLUSH_MAX_RETRIES || '3'),
-    maxBatchesPerFlush: parseInt(process.env.FLUSH_MAX_BATCHES || '3')
+    batchSize: sharedConfig.collector.flushBatchSize,
+    intervalMs: sharedConfig.collector.flushIntervalMs,
+    maxRetries: 3, // Default
+    maxBatchesPerFlush: sharedConfig.collector.maxBatchesPerFlush
   } as FlushConfig,
 
   // WebSocket 配置
   websocket: {
-    reconnect: process.env.WS_RECONNECT !== 'false',
-    reconnectDelay: parseInt(process.env.WS_RECONNECT_DELAY || '5000'),
-    heartbeatInterval: parseInt(process.env.WS_HEARTBEAT_INTERVAL || '30000'),
-    maxReconnectAttempts: parseInt(process.env.WS_MAX_RECONNECT_ATTEMPTS || '10')
+    reconnect: true,
+    reconnectDelay: sharedConfig.collector.reconnectDelay,
+    heartbeatInterval: sharedConfig.collector.heartbeatInterval,
+    maxReconnectAttempts: sharedConfig.collector.maxReconnectAttempts
   },
 
   // 訂閱配置
   subscriptions: {
-    symbols: (process.env.SYMBOLS || 'BTCUSDT,ETHUSDT').split(','),
-    streams: (process.env.STREAMS || 'trade,depth').split(',')
+    symbols: sharedConfig.collector.symbols,
+    streams: sharedConfig.collector.streams
   },
 
   // 日誌配置
   logging: {
-    level: process.env.LOG_LEVEL || 'info',
-    file: process.env.LOG_FILE
+    level: sharedConfig.server.logLevel,
+    file: undefined
   }
 };
 
 // 驗證必要配置
 export function validateConfig(): void {
-  const required = [
-    'POSTGRES_HOST',
-    'POSTGRES_DB',
-    'POSTGRES_USER',
-    'POSTGRES_PASSWORD',
-    'REDIS_HOST'
-  ];
-
-  const missing = required.filter(key => !process.env[key]);
-
-  if (missing.length > 0) {
-    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
-  }
+  // ConfigSchema.parse already validated this
 }
 
 // 顯示配置（隱藏敏感資訊）
 export function displayConfig(): void {
-  console.log('Configuration:');
+  console.log('Configuration (Unified):');
   console.log('  Redis:', `${config.redis.host}:${config.redis.port}`);
   console.log('  Database:', `${config.database.host}:${config.database.port}/${config.database.database}`);
   console.log('  Symbols:', config.subscriptions.symbols.join(', '));

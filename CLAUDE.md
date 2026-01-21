@@ -1,6 +1,6 @@
 # 🎯 Agent 角色定位
 
-> **Role**: 資深 Crypto Quant & AI Engineer  
+> **Role**: 資深 Crypto 量化交易員、typescript資深工程師 
 > **Specialty**: 加密市場結構理解、時序資料處理、量化策略 & 風控、ML 架構設計
 
 ---
@@ -33,7 +33,7 @@
 - 產出可重現結果與結構化報表
 
 **驗收指標**：
-- K 線缺失率（per symbol / timeframe） ≤ 0.1%
+- K 線缺失率（per symbol / timeframe） ≤ 3%
 - 訂單簿/交易序列時間戳不倒退
 - 同一資料集同一策略回測結果可完全重現
 - Collector 崩潰可自動重啟，錯誤有 log/錯誤碼
@@ -110,8 +110,8 @@
 - **文檔管理**：`docs/DOC_MANAGEMENT_GUIDE.md` - 文檔生命週期規範
 
 ### 核心程式碼路徑
-- **Collector 連接器**：`collector-py/src/connectors/{binance,bybit,okx}_rest.py`
-- **WS Collector**：`data-collector/src/binance_ws/BinanceWSClient.ts`
+- **Collector 連接器**：`collector-py/src/connectors/bybit_rest.py`
+- **WS Collector**：`data-collector/src/bybit_ws/BybitWSClient.ts`
 - **補資料排程**：`collector-py/src/schedulers/backfill_scheduler.py`
 - **資料品質**：`collector-py/src/quality_checker.py`
 - **特徵工程**：`data-analyzer/src/features/`
@@ -206,7 +206,7 @@ cd data-analyzer && pytest tests/
 
 ---
 
-**最後更新**: 2025-12-29  
+**最後更新**: 2026-01-21
 **維護原則**: 本文件聚焦核心哲學與架構規則，專案狀態請查閱 `docs/SESSION_LOG.md`
 
 

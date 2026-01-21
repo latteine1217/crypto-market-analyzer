@@ -24,6 +24,9 @@ export interface OHLCVWithIndicators extends OHLCVData {
   bollinger_lower?: number
   fractal_up?: boolean
   fractal_down?: boolean
+  open_interest?: number
+  open_interest_usd?: number
+  funding_rate?: number
 }
 
 // Market Data Types
@@ -105,8 +108,27 @@ export interface WSMessage {
   type: 'price' | 'trade' | 'orderbook'
   exchange: string
   symbol: string
-  data: any
+  data: WSTradeData | WSOrderBookData | WSPriceData
   timestamp: string
+}
+
+// WebSocket Data Types
+export interface WSTradeData {
+  price: number
+  quantity: number
+  side: 'buy' | 'sell'
+  tradeId?: string
+}
+
+export interface WSOrderBookData {
+  bids: OrderBookLevel[]
+  asks: OrderBookLevel[]
+  updateId?: number
+}
+
+export interface WSPriceData {
+  price: number
+  volume?: number
 }
 
 export interface RichListStat {
@@ -156,4 +178,70 @@ export interface NewsItem {
   votes_important: number
   currencies: { code: string; title: string }[]
   kind: string
+}
+
+// Events Types
+export interface Event {
+  id: number
+  source: 'fred_calendar' | 'coinmarketcal'
+  event_type: string
+  title: string
+  description?: string
+  event_date: string
+  country?: string
+  impact: 'high' | 'medium' | 'low'
+  actual?: string
+  forecast?: string
+  previous?: string
+  coins?: string[]
+  url?: string
+  metadata?: EventMetadata
+}
+
+export interface EventMetadata {
+  volatility?: string
+  proof?: string
+  categories?: string[]
+  [key: string]: unknown
+}
+
+export interface EventsByDate {
+  [date: string]: Event[]
+}
+
+export interface UpcomingEventsResponse {
+  total: number
+  days: number
+  eventsByDate: EventsByDate
+}
+
+// Macro & Sentiment Types
+export interface FearGreedData {
+  timestamp: string
+  value: number
+  classification: string
+  description: string
+}
+
+export interface ETFFlowSummary {
+  date: string
+  total_net_flow_usd: number
+  cumulative_flow_usd: number
+  product_count: number
+}
+
+export interface ETFProduct {
+  date: string
+  product_code: string;
+  product_name: string;
+  issuer: string;
+  net_flow_usd: number;
+  total_aum_usd: number | null;
+}
+
+export interface ETFIssuer {
+  issuer: string;
+  product_count: number;
+  total_net_flow_usd: number;
+  avg_daily_flow_usd: number;
 }

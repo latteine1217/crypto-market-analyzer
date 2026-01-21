@@ -2,7 +2,6 @@
 資料來源連接器模組
 提供各交易所與數據源的統一介面
 """
-from .binance_rest import BinanceRESTConnector
-from .okx_rest import OKXRESTConnector
+from .bybit_rest import BybitClient
 
-__all__ = ['BinanceRESTConnector', 'OKXRESTConnector']
+__all__ = ['BybitClient']

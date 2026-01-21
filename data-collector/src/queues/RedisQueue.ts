@@ -6,14 +6,16 @@ import Redis from 'ioredis';
 import { log } from '../utils/logger';
 import { config } from '../config';
 import { QueueMessage, MessageType } from '../types';
-import { RedisKeys } from '../../../shared/utils/RedisKeys';
+import { RedisKeys } from '../shared/utils/RedisKeys';
 
 export class RedisQueue {
   private client: Redis;
   private readonly MAX_QUEUE_SIZE = 10000;
   private readonly QUEUE_TTL = 3600; // 1 小時
+  private exchange: string;
 
-  constructor() {
+  constructor(exchange: string = '') {
+    this.exchange = exchange;
     this.client = new Redis({
       host: config.redis.host,
       port: config.redis.port,
@@ -45,7 +47,7 @@ export class RedisQueue {
    * 推送訊息到佇列
    */
   public async push(message: QueueMessage): Promise<void> {
-    const queueKey = RedisKeys.getQueueKey(message.type);
+    const queueKey = RedisKeys.getQueueKey(message.type, this.exchange);
 
     try {
       const pipeline = this.client.pipeline();
@@ -78,7 +80,7 @@ export class RedisQueue {
     const pipeline = this.client.pipeline();
 
     for (const message of messages) {
-      const queueKey = RedisKeys.getQueueKey(message.type);
+      const queueKey = RedisKeys.getQueueKey(message.type, this.exchange);
       pipeline.rpush(queueKey, JSON.stringify(message));
       pipeline.expire(queueKey, this.QUEUE_TTL);
       pipeline.ltrim(queueKey, -this.MAX_QUEUE_SIZE, -1);
@@ -96,7 +98,7 @@ export class RedisQueue {
    * 從佇列取出訊息（批次）
    */
   public async pop(type: MessageType, count: number = 100): Promise<QueueMessage[]> {
-    const queueKey = RedisKeys.getQueueKey(type);
+    const queueKey = RedisKeys.getQueueKey(type, this.exchange);
     const messages: QueueMessage[] = [];
 
     try {
@@ -128,7 +130,7 @@ export class RedisQueue {
    * 獲取佇列大小
    */
   public async getQueueSize(type: MessageType): Promise<number> {
-    const queueKey = RedisKeys.getQueueKey(type);
+    const queueKey = RedisKeys.getQueueKey(type, this.exchange);
     return await this.client.llen(queueKey);
   }
 
@@ -145,7 +147,7 @@ export class RedisQueue {
 
     const pipeline = this.client.pipeline();
     types.forEach(type => {
-      pipeline.llen(RedisKeys.getQueueKey(type));
+      pipeline.llen(RedisKeys.getQueueKey(type, this.exchange));
     });
 
     const results = await pipeline.exec();
@@ -163,7 +165,7 @@ export class RedisQueue {
    * 清空佇列
    */
   public async clearQueue(type: MessageType): Promise<void> {
-    const queueKey = RedisKeys.getQueueKey(type);
+    const queueKey = RedisKeys.getQueueKey(type, this.exchange);
     await this.client.del(queueKey);
     log.info(`Queue cleared: ${queueKey}`);
   }

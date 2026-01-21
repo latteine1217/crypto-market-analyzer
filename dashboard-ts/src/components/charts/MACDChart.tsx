@@ -16,14 +16,24 @@ import type { OHLCVWithIndicators } from '@/types/market'
 
 interface Props {
   data: OHLCVWithIndicators[]
+  onChartCreate?: (chart: IChartApi) => void
+  key?: string // 用於識別參數變化，觸發重新首次載入
 }
 
-export function MACDChart({ data }: Props) {
+export function MACDChart({ data, onChartCreate, key }: Props) {
   const chartContainerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const macdSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const signalSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const histSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
+  const isFirstLoadRef = useRef(true) // 追蹤是否為首次載入
+  const previousKeyRef = useRef(key) // 追蹤 key 變化
+
+  // 當 key 變化時（例如切換 timeframe/symbol），重置為首次載入
+  if (key !== previousKeyRef.current) {
+    isFirstLoadRef.current = true
+    previousKeyRef.current = key
+  }
 
   useEffect(() => {
     if (!chartContainerRef.current) return
@@ -44,6 +54,8 @@ export function MACDChart({ data }: Props) {
         timeVisible: true,
       },
     })
+
+    if (onChartCreate) onChartCreate(chart)
 
     const histSeries = chart.addSeries(HistogramSeries, {
       color: '#3b82f6',
@@ -116,8 +128,15 @@ export function MACDChart({ data }: Props) {
     signalSeries.setData(signalData)
     histSeries.setData(histData)
 
-    if (chartRef.current) {
-      chartRef.current.timeScale().fitContent()
+    // ✅ 僅在首次載入時自動調整範圍，顯示最新 120 根 K 線
+    if (isFirstLoadRef.current && chartRef.current && macdData.length > 0) {
+      const barCount = Math.min(120, macdData.length)
+      const from = Math.max(0, macdData.length - barCount)
+      chartRef.current.timeScale().setVisibleLogicalRange({
+        from: from,
+        to: macdData.length - 1
+      })
+      isFirstLoadRef.current = false
     }
   }, [data])
 

@@ -1,21 +1,13 @@
-import { Router, Request, Response } from 'express';
+import { Router } from 'express';
 import { query } from '../database/pool';
-import { CacheService } from '../database/cache';
-import { logger } from '../utils/logger';
+import { cacheableQuery } from '../utils/apiUtils';
 
 const router = Router();
-const cache = new CacheService(60); // 1 minute cache for markets
 
 // GET /api/markets - 取得所有市場列表
-router.get('/', async (req: Request, res: Response) => {
-  try {
-    const cacheKey = cache.makeKey('markets', 'all');
-    const cached = await cache.get(cacheKey);
-    
-    if (cached) {
-      return res.json({ data: cached, cached: true });
-    }
-
+router.get('/', cacheableQuery(
+  () => 'markets:all',
+  async () => {
     const result = await query(`
       SELECT 
         m.id,
@@ -30,27 +22,15 @@ router.get('/', async (req: Request, res: Response) => {
       WHERE m.is_active = true
       ORDER BY e.name, m.symbol
     `);
-
-    const markets = result.rows;
-    await cache.set(cacheKey, markets);
-
-    res.json({ data: markets, cached: false });
-  } catch (err) {
-    logger.error('Error fetching markets', err);
-    res.status(500).json({ error: 'Failed to fetch markets' });
-  }
-});
+    return result.rows;
+  },
+  { ttl: 60 }
+));
 
 // GET /api/markets/prices - 取得最新價格
-router.get('/prices', async (req: Request, res: Response) => {
-  try {
-    const cacheKey = cache.makeKey('markets', 'prices');
-    const cached = await cache.get(cacheKey);
-    
-    if (cached) {
-      return res.json({ data: cached, cached: true });
-    }
-
+router.get('/prices', cacheableQuery(
+  () => 'markets:prices',
+  async () => {
     const result = await query(`
       WITH latest_prices AS (
         SELECT DISTINCT ON (m.id)
@@ -59,13 +39,13 @@ router.get('/prices', async (req: Request, res: Response) => {
           m.id as market_id,
           o.close as price,
           o.volume,
-          o.open_time
+          o.time
         FROM ohlcv o
         JOIN markets m ON o.market_id = m.id
         JOIN exchanges e ON m.exchange_id = e.id
         WHERE o.timeframe = '1m'
-          AND o.open_time >= NOW() - INTERVAL '25 hours'
-        ORDER BY m.id, o.open_time DESC
+          AND o.time >= NOW() - INTERVAL '25 hours'
+        ORDER BY m.id, o.time DESC
       ),
       first_prices_24h AS (
         SELECT DISTINCT ON (m.id)
@@ -74,8 +54,8 @@ router.get('/prices', async (req: Request, res: Response) => {
         FROM ohlcv o
         JOIN markets m ON o.market_id = m.id
         WHERE o.timeframe = '1m'
-          AND o.open_time >= NOW() - INTERVAL '24 hours'
-        ORDER BY m.id, o.open_time ASC
+          AND o.time >= NOW() - INTERVAL '24 hours'
+        ORDER BY m.id, o.time ASC
       ),
       stats_24h AS (
         SELECT
@@ -86,7 +66,7 @@ router.get('/prices', async (req: Request, res: Response) => {
         FROM ohlcv o
         JOIN markets m ON o.market_id = m.id
         WHERE o.timeframe = '1m'
-          AND o.open_time >= NOW() - INTERVAL '24 hours'
+          AND o.time >= NOW() - INTERVAL '24 hours'
         GROUP BY m.id
       )
       SELECT
@@ -107,53 +87,34 @@ router.get('/prices', async (req: Request, res: Response) => {
       LEFT JOIN stats_24h s24 ON lp.market_id = s24.market_id
       ORDER BY lp.exchange, lp.symbol
     `);
-
-    const prices = result.rows;
-    await cache.set(cacheKey, prices, 5); // 5 seconds cache
-
-    res.json({ data: prices, cached: false });
-  } catch (err) {
-    logger.error('Error fetching market prices', err);
-    res.status(500).json({ error: 'Failed to fetch market prices' });
-  }
-});
+    return result.rows;
+  },
+  { ttl: 5 }
+));
 
 // GET /api/markets/quality - 取得最新資料品質指標
-router.get('/quality', async (req: Request, res: Response) => {
-  try {
-    const cacheKey = cache.makeKey('markets', 'quality');
-    const cached = await cache.get(cacheKey);
-    
-    if (cached) {
-      return res.json({ data: cached, cached: true });
-    }
-
+router.get('/quality', cacheableQuery(
+  () => 'markets:quality',
+  async () => {
     const result = await query(`
-      SELECT 
-        id,
-        symbol,
-        exchange,
-        timeframe,
-        check_time,
-        missing_rate,
-        duplicate_rate,
-        quality_score,
-        status,
-        missing_count,
-        expected_count,
-        backfill_task_created
-      FROM latest_data_quality
-      ORDER BY exchange, symbol, timeframe
+      SELECT DISTINCT ON (metadata->>'market_id', metadata->>'timeframe')
+        sl.time as check_time,
+        m.symbol,
+        e.name as exchange,
+        metadata->>'timeframe' as timeframe,
+        (metadata->>'missing_rate')::numeric as missing_rate,
+        sl.value as quality_score,
+        metadata->>'status' as status
+      FROM system_logs sl
+      JOIN markets m ON (sl.metadata->>'market_id')::int = m.id
+      JOIN exchanges e ON m.exchange_id = e.id
+      WHERE sl.level = 'QUALITY'
+        AND sl.module = 'collector'
+      ORDER BY metadata->>'market_id', metadata->>'timeframe', sl.time DESC
     `);
-
-    const quality = result.rows;
-    await cache.set(cacheKey, quality, 60); // 1 minute cache
-
-    res.json({ data: quality, cached: false });
-  } catch (err) {
-    logger.error('Error fetching market quality', err);
-    res.status(500).json({ error: 'Failed to fetch market quality' });
-  }
-});
+    return result.rows;
+  },
+  { ttl: 60 }
+));
 
 export { router as marketRoutes };

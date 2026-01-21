@@ -38,9 +38,9 @@ class WebSocketCollector {
     this.metricsServer = getMetricsServer(metricsPort);
     this.metricsServer.start();
 
-    this.orderBookManager = new OrderBookManager();
-    this.redisQueue = new RedisQueue();
-    this.dbFlusher = new DBFlusher(config.flush);
+    this.orderBookManager = new OrderBookManager(this.exchange);
+    this.redisQueue = new RedisQueue(this.exchange);
+    this.dbFlusher = new DBFlusher(config.flush, this.exchange);
 
     log.info('WebSocketCollector initialized', { exchange: this.exchange });
   }
@@ -137,7 +137,11 @@ class WebSocketCollector {
 
     // 錯誤
     this.wsClient.on('error', (error) => {
-      log.error('❌ WebSocket error', error);
+      log.error('❌ WebSocket error details:', {
+        message: error.message,
+        stack: error.stack,
+        exchange: this.exchange
+      });
       this.metricsServer.wsErrorsTotal.inc({ exchange: this.exchange, error_type: 'connection' });
     });
 
@@ -180,10 +184,22 @@ class WebSocketCollector {
         // 記錄 K線數據收集
         const klineData = message.data as any;
         if (klineData.symbol) {
-          // 使用 trades metric 也記錄 kline（或可以新增專門的 kline metric）
           this.metricsServer.redisQueuePushTotal.inc({
             queue_type: 'kline'
           });
+        }
+
+      } else if (message.type === MessageType.LIQUIDATION) {
+        // 推送爆倉數據到 Redis
+        await this.redisQueue.push(message);
+
+        // 記錄爆倉數據收集
+        const liqData = message.data as any;
+        if (liqData.symbol) {
+          this.metricsServer.redisQueuePushTotal.inc({
+            queue_type: 'liquidation'
+          });
+          log.debug(`🔥 Liquidation pushed to queue: ${liqData.symbol} ${liqData.side} ${liqData.price}`);
         }
 
       } else if (message.type === MessageType.ORDERBOOK_UPDATE) {
@@ -360,7 +376,7 @@ class WebSocketCollector {
 
       console.log('\n' + '='.repeat(80) + '\n');
 
-    }, 30000); // 每 30 秒
+    }, 300000); // 每 5 分鐘一次統計輸出
   }
 
   /**

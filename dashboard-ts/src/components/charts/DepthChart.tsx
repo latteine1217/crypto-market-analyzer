@@ -26,39 +26,62 @@ export function DepthChart({ orderbook }: Props) {
     return () => resizeObserver.disconnect()
   }, [])
 
-  const { points, maxVol, minPrice, maxPrice } = useMemo(() => {
+  const { points, maxVol, minPrice, maxPrice, spread, midPrice } = useMemo(() => {
     if (!orderbook || !orderbook.bids.length || !orderbook.asks.length) {
-      return { points: { bids: [], asks: [] }, maxVol: 0, minPrice: 0, maxPrice: 0 }
+      return { points: { bids: [], asks: [] }, maxVol: 0, minPrice: 0, maxPrice: 0, spread: 0, midPrice: 0 }
     }
 
-    const bids = [...orderbook.bids].sort((a, b) => Number(b.price) - Number(a.price)) // Descending
-    const asks = [...orderbook.asks].sort((a, b) => Number(a.price) - Number(b.price)) // Ascending
-
-    const bidPoints: { price: number; volume: number }[] = []
-    let bidVol = 0
-    for (const b of bids) {
-      bidVol += Number(b.quantity)
-      bidPoints.push({ price: Number(b.price), volume: bidVol })
+    // Bids: Processing logic for correct depth chart visualization
+    // 1. Sort Descending (High to Low) to calculate cumulative volume starting from Best Bid
+    const sortedBidsDesc = [...orderbook.bids].sort((a, b) => Number(b.price) - Number(a.price))
+    
+    const bidsWithVol: { price: number; volume: number }[] = []
+    let bidCumVol = 0
+    for (const b of sortedBidsDesc) {
+      bidCumVol += Number(b.quantity)
+      bidsWithVol.push({ price: Number(b.price), volume: bidCumVol })
     }
-    // Reverse bids for plotting (low price to high price)
-    bidPoints.reverse()
+    // 2. Reverse to Ascending (Low to High) for SVG path drawing (X-axis)
+    const bidPoints = bidsWithVol.reverse()
+
+    // Asks: Processing logic
+    // 1. Sort Ascending (Low to High) - Cumulative starts from Best Ask
+    const sortedAsksAsc = [...orderbook.asks].sort((a, b) => Number(a.price) - Number(b.price))
 
     const askPoints: { price: number; volume: number }[] = []
-    let askVol = 0
-    for (const a of asks) {
-      askVol += Number(a.quantity)
-      askPoints.push({ price: Number(a.price), volume: askVol })
+    let askCumVol = 0
+    for (const a of sortedAsksAsc) {
+      askCumVol += Number(a.quantity)
+      askPoints.push({ price: Number(a.price), volume: askCumVol })
     }
 
-    const maxVol = Math.max(bidVol, askVol)
-    const minPrice = bidPoints[0]?.price || 0
-    const maxPrice = askPoints[askPoints.length - 1]?.price || 0
+    const maxVol = Math.max(bidCumVol, askCumVol)
+    
+    // 計算最佳買賣價與中價
+    // bidPoints is now Ascending: last element is Best Bid (Highest Price)
+    const bestBid = bidPoints[bidPoints.length - 1]?.price || 0
+    // askPoints is Ascending: first element is Best Ask (Lowest Price)
+    const bestAsk = askPoints[0]?.price || 0
+    
+    const spread = bestAsk - bestBid
+    const midPrice = (bestBid + bestAsk) / 2
+    
+    // 使用對稱的價格範圍來顯示深度圖
+    // bidPoints[0] is now the Lowest Bid Price
+    const bidRange = bestBid - (bidPoints[0]?.price || bestBid)
+    const askRange = (askPoints[askPoints.length - 1]?.price || bestAsk) - bestAsk
+    const maxRange = Math.max(bidRange, askRange) * 1.1 // 留 10% 邊距
+    
+    const minPrice = Math.max(0, midPrice - maxRange)
+    const maxPrice = midPrice + maxRange
     
     return { 
       points: { bids: bidPoints, asks: askPoints }, 
       maxVol, 
       minPrice, 
-      maxPrice 
+      maxPrice,
+      spread,
+      midPrice
     }
   }, [orderbook])
 
@@ -79,8 +102,15 @@ export function DepthChart({ orderbook }: Props) {
   }
 
   // Generate SVG paths
-  const bidPath = `M 0 ${chartHeight} ` + points.bids.map(p => `L ${getX(p.price)} ${getY(p.volume)}`).join(' ') + ` L ${getX(points.bids[points.bids.length - 1].price)} ${chartHeight} Z`
-  const askPath = `M ${getX(points.asks[0].price)} ${chartHeight} ` + points.asks.map(p => `L ${getX(p.price)} ${getY(p.volume)}`).join(' ') + ` L ${chartWidth} ${chartHeight} Z`
+  // Bid path: 從最低價的底部開始，畫到最高價，再回到最高價的底部
+  const bidPath = `M ${getX(points.bids[0].price)} ${chartHeight} ` + 
+    points.bids.map(p => `L ${getX(p.price)} ${getY(p.volume)}`).join(' ') + 
+    ` L ${getX(points.bids[points.bids.length - 1].price)} ${chartHeight} Z`
+  
+  // Ask path: 從最低價的底部開始，畫到最高價，再回到最高價的底部
+  const askPath = `M ${getX(points.asks[0].price)} ${chartHeight} ` + 
+    points.asks.map(p => `L ${getX(p.price)} ${getY(p.volume)}`).join(' ') + 
+    ` L ${getX(points.asks[points.asks.length - 1].price)} ${chartHeight} Z`
 
   const handleMouseMove = (e: React.MouseEvent) => {
     const rect = e.currentTarget.getBoundingClientRect()
@@ -144,9 +174,46 @@ export function DepthChart({ orderbook }: Props) {
           <line x1="0" y1={chartHeight} x2={chartWidth} y2={chartHeight} stroke="#374151" />
           <line x1="0" y1="0" x2="0" y2={chartHeight} stroke="#374151" />
           
+          {/* Spread Area Highlight */}
+          {spread > 0 && (
+            <rect
+              x={getX(midPrice - spread / 2)}
+              y="0"
+              width={getX(midPrice + spread / 2) - getX(midPrice - spread / 2)}
+              height={chartHeight}
+              fill="rgba(100, 116, 139, 0.1)"
+              stroke="#64748b"
+              strokeWidth="1"
+              strokeDasharray="4"
+            />
+          )}
+          
           {/* Areas */}
           <path d={bidPath} fill="rgba(34, 197, 94, 0.2)" stroke="#22c55e" strokeWidth="2" />
           <path d={askPath} fill="rgba(239, 68, 68, 0.2)" stroke="#ef4444" strokeWidth="2" />
+          
+          {/* Mid Price Line */}
+          {midPrice > 0 && (
+            <>
+              <line 
+                x1={getX(midPrice)} y1="0" 
+                x2={getX(midPrice)} y2={chartHeight} 
+                stroke="#fbbf24" 
+                strokeWidth="2" 
+                strokeDasharray="6 3"
+              />
+              <text 
+                x={getX(midPrice)} 
+                y="-5" 
+                fill="#fbbf24" 
+                fontSize="12" 
+                fontWeight="bold"
+                textAnchor="middle"
+              >
+                Mid: ${midPrice.toFixed(2)}
+              </text>
+            </>
+          )}
 
           {/* Hover Indicator */}
           {hoverData && (

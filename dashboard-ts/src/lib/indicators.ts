@@ -80,6 +80,10 @@ export function calculateRSI(data: number[], period: number = 14): (number | nul
       avgLoss += loss;
       result.push(null);
     } else if (i === period) {
+      // Add current period's gain/loss to the sum
+      avgGain += gain;
+      avgLoss += loss;
+
       // 第一個 RSI 使用簡單平均
       avgGain = avgGain / period;
       avgLoss = avgLoss / period;
@@ -232,9 +236,9 @@ export function calculateFractals(
 export function calculateAllIndicators(data: OHLCVData[]): OHLCVWithIndicators[] {
   if (data.length === 0) return [];
   
-  const closes = data.map(d => d.close);
-  const highs = data.map(d => d.high);
-  const lows = data.map(d => d.low);
+  const closes = data.map(d => Number(d.close));
+  const highs = data.map(d => Number(d.high));
+  const lows = data.map(d => Number(d.low));
   
   const sma20 = calculateSMA(closes, 20);
   const sma50 = calculateSMA(closes, 50);

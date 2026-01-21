@@ -1,7 +1,5 @@
 import { WSConfig, IWSClient } from './types';
-import { BinanceWSClient } from './binance_ws/BinanceWSClient';
 import { BybitWSClient } from './bybit_ws/BybitWSClient';
-import { OKXWSClient } from './okx_ws/OKXWSClient';
 import { log } from './utils/logger';
 
 export type WSClientConstructor = new (config: WSConfig) => IWSClient;
@@ -11,9 +9,7 @@ export class ExchangeRegistry {
 
   static {
     // 註冊預設交易所
-    this.register('binance', BinanceWSClient as unknown as WSClientConstructor);
     this.register('bybit', BybitWSClient as unknown as WSClientConstructor);
-    this.register('okx', OKXWSClient as unknown as WSClientConstructor);
   }
 
   /**
@@ -31,9 +27,9 @@ export class ExchangeRegistry {
     const ClientClass = this.clients.get(name.toLowerCase());
     
     if (!ClientClass) {
-      log.error(`Exchange client not found: ${name}. Falling back to Binance.`);
-      const BinanceClass = this.clients.get('binance')!;
-      return new BinanceClass(config);
+      log.error(`Exchange client not found: ${name}. Falling back to Bybit.`);
+      const BybitClass = this.clients.get('bybit')!;
+      return new BybitClass(config);
     }
 
     return new ClientClass(config);

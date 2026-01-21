@@ -13,6 +13,17 @@ alertRoutes.get('/', async (req, res, next) => {
   }
 });
 
+// GET /api/alerts/signals - 獲取系統生成的市場訊號
+alertRoutes.get('/signals', async (req, res, next) => {
+  try {
+    const limit = parseInt(String(req.query.limit || '50'));
+    const signals = await alertService.getMarketSignals(limit);
+    res.json({ data: signals });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // POST /api/alerts - 創建警報
 alertRoutes.post('/', async (req, res, next) => {
   try {

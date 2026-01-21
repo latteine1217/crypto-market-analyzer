@@ -21,7 +21,7 @@ router.get('/', async (req: Request, res: Response) => {
 
     let sql = `
       SELECT 
-        id, external_id, title, url, source_domain, published_at, 
+        time as published_at, title, url, source_domain, 
         votes_positive, votes_negative, votes_important,
         currencies, kind
       FROM news
@@ -34,7 +34,7 @@ router.get('/', async (req: Request, res: Response) => {
       params.push(JSON.stringify([{ code: currency.toUpperCase() }]));
     }
     
-    sql += ` ORDER BY published_at DESC LIMIT $${params.length + 1}`;
+    sql += ` ORDER BY time DESC LIMIT $${params.length + 1}`;
     params.push(limit);
 
     const result = await query(sql, params);

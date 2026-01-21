@@ -1,4 +1,5 @@
 import express from 'express';
+import { createServer } from 'http';
 import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
@@ -13,21 +14,42 @@ import { blockchainRoutes } from './routes/blockchain';
 import { alertRoutes } from './routes/alerts';
 import { newsRoutes } from './routes/news';
 import { analyticsRoutes } from './routes/analytics';
+import { eventsRoutes } from './routes/events';
+import sentimentRoutes from './routes/sentiment';
+import etfRoutes from './routes/etf';
+import fredRoutes from './routes/fred';
+import { statusRoutes } from './routes/status';
+import pool from './database/pool';
 import { startAlertMonitor } from './services/alertService';
+import { SocketService } from './services/socketService';
+import { PostgresTransport } from './utils/PostgresTransport';
 
-dotenv.config();
+import { config } from './shared/config';
+
+// Initialize Database Logging
+logger.add(new PostgresTransport({ pool }));
 
 const app = express();
-const PORT = process.env.PORT || 8080;
+const httpServer = createServer(app);
+const PORT = config.server.port;
+
+// Initialize Socket.IO
+SocketService.getInstance().initialize(httpServer);
 
 // Middleware
-app.use(helmet());
-app.use(cors());
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" }
+}));
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(compression());
 app.use(express.json());
 
 // Health check
-app.get('/health', (req, res) => {
+app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
@@ -40,18 +62,30 @@ app.use('/api/blockchain', blockchainRoutes);
 app.use('/api/alerts', alertRoutes);
 app.use('/api/news', newsRoutes);
 app.use('/api/analytics', analyticsRoutes);
+app.use('/api/events', eventsRoutes);
+app.use('/api/fear-greed', sentimentRoutes);
+app.use('/api/etf-flows', etfRoutes);
+app.use('/api/fred', fredRoutes);
+app.use('/api/status', statusRoutes);
 
 // Error handling
 app.use(errorHandler);
 
 // Start server
-app.listen(PORT, () => {
-  logger.info(`API Server running on port ${PORT}`);
-  logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
-  
-  // Start background services
-  startAlertMonitor();
-});
+(async () => {
+  try {
+    httpServer.listen(PORT, () => {
+      logger.info(`API Server running on port ${PORT}`);
+      logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
+      
+      // Start background services
+      startAlertMonitor();
+    });
+  } catch (error) {
+    logger.error('Failed to start API Server due to migration error:', error);
+    process.exit(1);
+  }
+})();
 
 // Graceful shutdown
 process.on('SIGTERM', () => {

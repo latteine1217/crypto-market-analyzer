@@ -313,21 +313,23 @@ class ConfigLoader:
 
 # 範例用法
 if __name__ == "__main__":
+    from loguru import logger
+    
     # 測試配置載入
     loader = ConfigLoader()
 
     # 載入單一配置
-    config = loader.load_collector_config("binance_btcusdt_1m.yml")
-    print(f"Loaded config: {config.name}")
-    print(f"Exchange: {config.exchange.name}")
-    print(f"Symbol: {config.symbol.base}/{config.symbol.quote}")
-    print(f"Timeframe: {config.timeframe}")
-    print(f"Historical mode enabled: {config.mode.historical.enabled}")
-    print(f"Request timeout: {config.request.timeout}s")
-    print(f"Max retries: {config.request.max_retries}")
+    config = loader.load_collector_config("bybit_btcusdt_1m.yml")
+    logger.info(f"Loaded config: {config.name}")
+    logger.info(f"Exchange: {config.exchange.name}")
+    logger.info(f"Symbol: {config.symbol.base}/{config.symbol.quote}")
+    logger.info(f"Timeframe: {config.timeframe}")
+    logger.info(f"Historical mode enabled: {config.mode.historical.enabled}")
+    logger.info(f"Request timeout: {config.request.timeout}s")
+    logger.info(f"Max retries: {config.request.max_retries}")
 
     # 載入所有配置
     all_configs = loader.load_all_collector_configs()
-    print(f"\nTotal configs loaded: {len(all_configs)}")
+    logger.info(f"Total configs loaded: {len(all_configs)}")
     for cfg in all_configs:
-        print(f"  - {cfg.name}")
+        logger.info(f"  - {cfg.name}")

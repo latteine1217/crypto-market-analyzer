@@ -21,7 +21,7 @@ export function AlertsManager({ currentSymbol, currentPrice }: Props) {
   const { data: alerts } = useQuery({
     queryKey: ['alerts'],
     queryFn: fetchAlerts,
-    refetchInterval: 5000, // Poll every 5 seconds to check trigger status
+    refetchInterval: 5000, 
   })
 
   const createMutation = useMutation({
@@ -51,14 +51,8 @@ export function AlertsManager({ currentSymbol, currentPrice }: Props) {
     })
   }
 
-  // Filter alerts for current view or show all? 
-  // Let's show active alerts for current symbol at top, then others?
-  // Or just a simple list.
   const symbolAlerts = alerts?.filter(a => a.symbol === currentSymbol) || []
   const otherAlerts = alerts?.filter(a => a.symbol !== currentSymbol) || []
-
-  // Check if any alert was recently triggered (e.g. in last minute) to show notification
-  // For now, UI just shows status.
 
   return (
     <div className="card">

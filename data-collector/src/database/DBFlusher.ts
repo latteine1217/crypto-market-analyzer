@@ -4,12 +4,11 @@
  */
 import { Pool, PoolClient } from 'pg';
 import { log } from '../utils/logger';
-import { config } from '../config';
+import { createPool } from '../shared/database/pool';
 import { RedisQueue } from '../queues/RedisQueue';
 import {
   MessageType,
   Trade,
-  OrderBookSnapshot,
   Kline,
   FlushConfig
 } from '../types';
@@ -27,28 +26,20 @@ export class DBFlusher {
     errorCount: 0
   };
 
-  constructor(private flushConfig: FlushConfig) {
+  constructor(private flushConfig: FlushConfig, private exchange: string = '') {
     // 建立 PostgreSQL 連接池
-    this.pool = new Pool({
-      host: config.database.host,
-      port: config.database.port,
-      database: config.database.database,
-      user: config.database.user,
-      password: config.database.password,
-      max: 20,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 2000
-    });
+    this.pool = createPool();
 
     this.pool.on('error', (err: Error) => {
       log.error('PostgreSQL pool error', err);
     });
 
-    this.queue = new RedisQueue();
+    this.queue = new RedisQueue(this.exchange);
 
     log.info('DBFlusher initialized', {
       batchSize: flushConfig.batchSize,
-      intervalMs: flushConfig.intervalMs
+      intervalMs: flushConfig.intervalMs,
+      exchange: this.exchange
     });
   }
 
@@ -95,11 +86,13 @@ export class DBFlusher {
         const tradesFlushed = await this.flushTrades();
         const orderbooksFlushed = await this.flushOrderBookSnapshots();
         const klinesFlushed = await this.flushKlines();
+        const liquidationsFlushed = await this.flushLiquidations();
 
         keepDraining =
           tradesFlushed >= batchSize || 
           orderbooksFlushed >= batchSize ||
-          klinesFlushed >= batchSize;
+          klinesFlushed >= batchSize ||
+          liquidationsFlushed >= batchSize;
         batches += 1;
       }
 
@@ -134,8 +127,7 @@ export class DBFlusher {
       await client.query('BEGIN');
 
       const rows: Array<[
-        number, string, number, number, number | null, string | null, boolean,
-        number
+        number, number, number, string | null, string, number
       ]> = [];
 
       for (const msg of messages) {
@@ -150,12 +142,10 @@ export class DBFlusher {
 
         rows.push([
           marketId,
-          trade.tradeId.toString(),
           trade.price,
           trade.quantity,
-          trade.quoteQuantity || null,
           trade.side || null,
-          trade.isBuyerMaker,
+          trade.tradeId.toString(),
           trade.timestamp
         ]);
       }
@@ -163,20 +153,18 @@ export class DBFlusher {
       const values = rows
         .map(
           (_, i) =>
-            `($${i * 8 + 1}, $${i * 8 + 2}, $${i * 8 + 3}, $${i * 8 + 4}, ` +
-            `$${i * 8 + 5}, $${i * 8 + 6}, $${i * 8 + 7}, ` +
-            `to_timestamp($${i * 8 + 8} / 1000.0))`
+            `($${i * 6 + 1}, to_timestamp($${i * 6 + 6} / 1000.0), $${i * 6 + 2}, $${i * 6 + 3}, ` +
+            `$${i * 6 + 4}, $${i * 6 + 5})`
         )
         .join(', ');
 
       await client.query(
         `
         INSERT INTO trades (
-          market_id, trade_id, price, quantity, quote_qty,
-          side, is_buyer_maker, timestamp
+          market_id, time, price, amount, side, trade_id
         )
         VALUES ${values}
-        ON CONFLICT (market_id, timestamp, trade_id) DO NOTHING
+        ON CONFLICT (market_id, time, trade_id) DO NOTHING
         `,
         rows.flat()
       );
@@ -184,7 +172,7 @@ export class DBFlusher {
       await client.query('COMMIT');
 
       this.stats.totalFlushed += messages.length;
-      log.info(`Flushed ${messages.length} trades`);
+      log.debug(`Flushed ${messages.length} trades`);
 
       return messages.length;
 
@@ -205,78 +193,12 @@ export class DBFlusher {
    * Flush 訂單簿快照
    */
   private async flushOrderBookSnapshots(): Promise<number> {
-    const messages = await this.queue.pop(
+    // V3 Schema 已移除 orderbook_snapshots 表以優化效能
+    await this.queue.pop(
       MessageType.ORDERBOOK_SNAPSHOT,
       this.flushConfig.batchSize
     );
-
-    if (messages.length === 0) {
-      return 0;
-    }
-
-    log.debug(`Flushing ${messages.length} orderbook snapshots`);
-
-    const client = await this.pool.connect();
-
-    try {
-      await client.query('BEGIN');
-
-      const rows: Array<[number, number, string, string]> = [];
-
-      for (const msg of messages) {
-        const snapshot = msg.data as OrderBookSnapshot;
-
-        const marketId = await this.getOrCreateMarketId(
-          client,
-          msg.exchange,
-          snapshot.symbol
-        );
-
-        rows.push([
-          marketId,
-          snapshot.timestamp,
-          JSON.stringify(snapshot.bids),
-          JSON.stringify(snapshot.asks)
-        ]);
-      }
-
-      const values = rows
-        .map(
-          (_, i) =>
-            `($${i * 4 + 1}, to_timestamp($${i * 4 + 2} / 1000.0), ` +
-            `$${i * 4 + 3}, $${i * 4 + 4})`
-        )
-        .join(', ');
-
-      await client.query(
-        `
-        INSERT INTO orderbook_snapshots (
-          market_id, timestamp, bids, asks
-        )
-        VALUES ${values}
-        ON CONFLICT (market_id, timestamp)
-        DO UPDATE SET bids = EXCLUDED.bids, asks = EXCLUDED.asks
-        `,
-        rows.flat()
-      );
-
-      await client.query('COMMIT');
-
-      this.stats.totalFlushed += messages.length;
-      log.info(`Flushed ${messages.length} orderbook snapshots`);
-
-      return messages.length;
-
-    } catch (error) {
-      await client.query('ROLLBACK');
-      log.error('Failed to flush orderbook snapshots', error);
-
-      await this.queue.pushBatch(messages);
-      throw error;
-
-    } finally {
-      client.release();
-    }
+    return 0;
   }
 
   /**
@@ -301,7 +223,7 @@ export class DBFlusher {
 
       const rows: Array<[
         number, string, number, number, number, number, number, 
-        number, number | null, number | null
+        number, string
       ]> = [];
 
       for (const msg of messages) {
@@ -318,17 +240,21 @@ export class DBFlusher {
           kline.symbol
         );
 
+        const metadata = {
+          quote_volume: kline.quoteVolume || null,
+          trade_count: kline.trades || null
+        };
+
         rows.push([
           marketId,
           kline.interval,           // timeframe (1m, 5m, 1h, etc.)
-          kline.openTime,           // open_time
+          kline.openTime,           // time
           kline.open,
           kline.high,
           kline.low,
           kline.close,
           kline.volume,
-          kline.quoteVolume || null,
-          kline.trades || null
+          JSON.stringify(metadata)
         ]);
       }
 
@@ -340,29 +266,28 @@ export class DBFlusher {
       const values = rows
         .map(
           (_, i) =>
-            `($${i * 10 + 1}, $${i * 10 + 2}, to_timestamp($${i * 10 + 3} / 1000.0), ` +
-            `$${i * 10 + 4}, $${i * 10 + 5}, $${i * 10 + 6}, $${i * 10 + 7}, ` +
-            `$${i * 10 + 8}, $${i * 10 + 9}, $${i * 10 + 10})`
+            `($${i * 9 + 1}, $${i * 9 + 2}, to_timestamp($${i * 9 + 3} / 1000.0), ` +
+            `$${i * 9 + 4}, $${i * 9 + 5}, $${i * 9 + 6}, $${i * 9 + 7}, ` +
+            `$${i * 9 + 8}, $${i * 9 + 9})`
         )
         .join(', ');
 
       await client.query(
         `
         INSERT INTO ohlcv (
-          market_id, timeframe, open_time,
+          market_id, timeframe, time,
           open, high, low, close, volume,
-          quote_volume, trade_count
+          metadata
         )
         VALUES ${values}
-        ON CONFLICT (market_id, timeframe, open_time) 
+        ON CONFLICT (market_id, time, timeframe) 
         DO UPDATE SET
           open = EXCLUDED.open,
           high = EXCLUDED.high,
           low = EXCLUDED.low,
           close = EXCLUDED.close,
           volume = EXCLUDED.volume,
-          quote_volume = EXCLUDED.quote_volume,
-          trade_count = EXCLUDED.trade_count
+          metadata = EXCLUDED.metadata
         `,
         rows.flat()
       );
@@ -370,7 +295,7 @@ export class DBFlusher {
       await client.query('COMMIT');
 
       this.stats.totalFlushed += rows.length;
-      log.info(`Flushed ${rows.length} klines (${messages.length - rows.length} skipped as not closed)`);
+      log.debug(`Flushed ${rows.length} klines (${messages.length - rows.length} skipped as not closed)`);
 
       return rows.length;
 
@@ -381,6 +306,79 @@ export class DBFlusher {
       await this.queue.pushBatch(messages);
       throw error;
 
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Flush 爆倉數據
+   */
+  private async flushLiquidations(): Promise<number> {
+    const messages = await this.queue.pop(
+      MessageType.LIQUIDATION,
+      this.flushConfig.batchSize
+    );
+
+    if (messages.length === 0) {
+      return 0;
+    }
+
+    log.debug(`Flushing ${messages.length} liquidations`);
+
+    const client = await this.pool.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      const rows: Array<[string, string, string, string, number, number, number]> = [];
+
+      for (const msg of messages) {
+        const liq = msg.data as any; // Using any to avoid TS mismatch if Liquidation type is not yet recognized globally
+        
+        const valueUsd = liq.price * liq.quantity;
+        
+        rows.push([
+          msg.exchange,
+          liq.symbol,
+          liq.side,
+          liq.price,
+          liq.quantity,
+          valueUsd,
+          liq.timestamp
+        ]);
+      }
+
+      const values = rows
+        .map(
+          (_, i) => {
+            const base = i * 7;
+            // $1: exchange, $2: symbol, $3: side, $4: price, $5: quantity, $6: value_usd, $7: timestamp
+            return `(to_timestamp($${base + 7} / 1000.0), $${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6})`;
+          }
+        )
+        .join(', ');
+
+      await client.query(
+        `
+        INSERT INTO liquidations (
+          time, exchange, symbol, side, price, quantity, value_usd
+        )
+        VALUES ${values}
+        ON CONFLICT (time, exchange, symbol, side, price) DO NOTHING
+        `,
+        rows.flat()
+      );
+
+      await client.query('COMMIT');
+      this.stats.totalFlushed += messages.length;
+      return messages.length;
+
+    } catch (error) {
+      await client.query('ROLLBACK');
+      log.error('Failed to flush liquidations', error);
+      await this.queue.pushBatch(messages);
+      throw error;
     } finally {
       client.release();
     }
@@ -411,8 +409,8 @@ export class DBFlusher {
     if (result.rows.length === 0) {
       // 建立 exchange
       result = await client.query(
-        `INSERT INTO exchanges (name, api_type, is_active)
-         VALUES ($1, 'websocket', TRUE)
+        `INSERT INTO exchanges (name, is_active)
+         VALUES ($1, TRUE)
          RETURNING id`,
         [exchangeName]
       );
@@ -433,12 +431,21 @@ export class DBFlusher {
     // 標準化 symbol 為交易所原生格式 (無斜線)
     const normalizedSymbol = normalizeSymbol(symbol);
 
+    // 決定市場類型 (啟發式判斷)
+    let marketType = 'spot';
+    if (exchangeName === 'bybit') {
+      marketType = 'linear_perpetual';
+    }
+
     result = await client.query(
-      `INSERT INTO markets (exchange_id, symbol, base_asset, quote_asset)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (exchange_id, symbol) DO UPDATE SET symbol = EXCLUDED.symbol
+      `INSERT INTO markets (exchange_id, symbol, base_asset, quote_asset, market_type)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (exchange_id, symbol) DO UPDATE SET 
+         base_asset = EXCLUDED.base_asset,
+         quote_asset = EXCLUDED.quote_asset,
+         market_type = EXCLUDED.market_type
        RETURNING id`,
-      [exchangeId, normalizedSymbol, base, quote]
+      [exchangeId, normalizedSymbol, base, quote, marketType]
     );
 
     const marketId = result.rows[0].id;

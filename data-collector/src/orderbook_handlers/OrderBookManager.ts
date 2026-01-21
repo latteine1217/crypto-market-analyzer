@@ -16,8 +16,8 @@ export class OrderBookManager {
   private readonly SNAPSHOT_INTERVAL_MS = 60000; // 每分鐘生成一次快照
   private readonly MAX_DEPTH = 20; // 保留的訂單簿深度
 
-  constructor() {
-    log.info('OrderBookManager initialized');
+  constructor(private exchange: string = 'bybit') {
+    log.info(`OrderBookManager initialized for ${exchange}`);
   }
 
   /**
@@ -26,7 +26,7 @@ export class OrderBookManager {
    */
   public async initializeOrderBook(symbol: string): Promise<void> {
     try {
-      log.info(`Initializing order book for ${symbol}`);
+      log.info(`Initializing order book for ${symbol} on ${this.exchange}`);
 
       const snapshot = await this.fetchOrderBookSnapshot(symbol);
 
@@ -49,36 +49,45 @@ export class OrderBookManager {
 
     } catch (error) {
       log.error(`Failed to initialize order book for ${symbol}`, error);
-      throw error;
+      // 注意：某些交易所透過 WebSocket 直接提供快照，REST 可能失敗
     }
   }
 
   /**
-   * 從 Binance REST API 獲取訂單簿快照
+   * 從交易所 REST API 獲取訂單簿快照
    */
   private async fetchOrderBookSnapshot(symbol: string): Promise<OrderBookSnapshot> {
-    const url = `https://api.binance.com/api/v3/depth`;
-    const params = {
-      symbol: symbol,
-      limit: 1000
-    };
+    if (this.exchange === 'bybit') {
+      const url = `https://api.bybit.com/v5/market/orderbook`;
+      const params = {
+        category: 'linear',
+        symbol: symbol,
+        limit: 50
+      };
 
-    const response = await axios.get(url, { params });
-    const data = response.data;
+      const response = await axios.get(url, { params });
+      const data = response.data;
 
-    return {
-      symbol,
-      timestamp: Date.now(),
-      lastUpdateId: data.lastUpdateId,
-      bids: data.bids.map((b: [string, string]) => ({
-        price: parseFloat(b[0]),
-        quantity: parseFloat(b[1])
-      })),
-      asks: data.asks.map((a: [string, string]) => ({
-        price: parseFloat(a[0]),
-        quantity: parseFloat(a[1])
-      }))
-    };
+      if (data.retCode !== 0) {
+        throw new Error(`Bybit API error: ${data.retMsg}`);
+      }
+
+      return {
+        symbol,
+        timestamp: parseInt(data.result.ts),
+        lastUpdateId: data.result.u,
+        bids: data.result.b.map((b: [string, string]) => ({
+          price: parseFloat(b[0]),
+          quantity: parseFloat(b[1])
+        })),
+        asks: data.result.a.map((a: [string, string]) => ({
+          price: parseFloat(a[0]),
+          quantity: parseFloat(a[1])
+        }))
+      };
+    } else {
+      throw new Error(`Unsupported exchange for REST snapshot: ${this.exchange}`);
+    }
   }
 
   /**

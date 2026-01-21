@@ -94,10 +94,12 @@ class BitInfoChartsClient:
 
 if __name__ == "__main__":
     # Test run
+    import logging
     logging.basicConfig(level=logging.INFO)
+    
     client = BitInfoChartsClient()
     data = client.fetch_distribution_data()
     if data:
-        print(f"Parsed {len(data)} rows.")
+        logger.info(f"Parsed {len(data)} rows.")
         for row in data:
-            print(row)
+            logger.info(row)

@@ -152,27 +152,31 @@ class APIErrorLogger:
         try:
             import json
 
+            metadata = {
+                'endpoint': endpoint,
+                'error_type': error_type,
+                'error_code': error_code,
+                'error_message': error_message,
+                'request_params': request_params
+            }
+
             with self.conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO api_error_logs (
-                        exchange_name, endpoint, error_type,
-                        error_code, error_message, request_params, timestamp
+                    INSERT INTO system_logs (
+                        time, module, level, message, metadata
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                    VALUES (NOW(), %s, 'ERROR', %s, %s)
                     """,
                     (
                         exchange_name,
-                        endpoint,
-                        error_type,
-                        error_code,
-                        error_message,
-                        json.dumps(request_params) if request_params else None
+                        f"API Error: {endpoint}",
+                        json.dumps(metadata)
                     )
                 )
                 self.conn.commit()
 
-            logger.debug(f"Logged API error: {exchange_name}/{endpoint} - {error_type}")
+            logger.debug(f"Logged API error to system_logs: {exchange_name}/{endpoint} - {error_type}")
 
         except Exception as e:
             logger.error(f"Failed to log API error to DB: {e}")
@@ -359,9 +363,9 @@ if __name__ == "__main__":
 
     try:
         result = fetch_with_retry()
-        print(f"Result: {result}")
+        logger.info(f"Result: {result}")
     except Exception as e:
-        print(f"Failed after retries: {e}")
+        logger.error(f"Failed after retries: {e}")
 
     # 測試連續失敗追蹤
     tracker = ConsecutiveFailureTracker(threshold=3)
@@ -369,7 +373,7 @@ if __name__ == "__main__":
 
     for i in range(5):
         count = tracker.record_failure(key)
-        print(f"Failure {i+1}: count = {count}")
+        logger.info(f"Failure {i+1}: count = {count}")
 
         if tracker.is_threshold_exceeded(key):
-            print(f"⚠️ Threshold exceeded for {key}!")
+            logger.warning(f"⚠️ Threshold exceeded for {key}!")

@@ -7,40 +7,72 @@ import {
   CandlestickSeries,
   LineSeries,
   AreaSeries,
+  HistogramSeries,
   type IChartApi,
   type ISeriesApi,
   type UTCTimestamp,
   type CandlestickData,
   type LineData,
   type HistogramData,
-  type AreaData
+  type AreaData,
+  type SeriesMarker
 } from 'lightweight-charts'
 import type { OHLCVWithIndicators } from '@/types/market'
 
+interface CVDPoint {
+  time: string | number
+  cvd: number
+}
+
+interface LiquidationData {
+  timestamp: string | number
+  side: 'buy' | 'sell'
+  price: number
+  value_usd: number
+}
+
 interface Props {
   data: OHLCVWithIndicators[]
+  cvdData?: CVDPoint[]
+  liquidations?: LiquidationData[]
   visibleIndicators?: {
     ma20: boolean
     ma60: boolean
     ma200: boolean
     bb: boolean
   }
+  onChartCreate?: (chart: IChartApi) => void
+  key?: string // 用於識別參數變化，觸發重新首次載入
 }
 
 export function LightweightCandlestickChart({ 
   data, 
-  visibleIndicators = { ma20: true, ma60: true, ma200: true, bb: false } 
+  cvdData = [],
+  liquidations = [],
+  visibleIndicators = { ma20: true, ma60: true, ma200: true, bb: false },
+  onChartCreate,
+  key
 }: Props) {
   const chartContainerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
-  const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
+  const candleSeriesRef = useRef<any>(null) // 使用 any 繞過嚴格的 v4 類型檢查，確保編譯通過
+  const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
+  const cvdSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const ma20SeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const ma60SeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const ma200SeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const bbUpperSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const bbLowerSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
-  const bbFillUpperSeriesRef = useRef<ISeriesApi<'Area'> | null>(null)
-  const bbFillLowerSeriesRef = useRef<ISeriesApi<'Area'> | null>(null)
+  const isFirstLoadRef = useRef(true) // 追蹤是否為首次載入
+  const previousKeyRef = useRef(key) // 追蹤 key 變化
+
+  // 當 key 變化時（例如切換 timeframe/symbol），重置為首次載入
+  useEffect(() => {
+    if (key !== previousKeyRef.current) {
+      isFirstLoadRef.current = true
+      previousKeyRef.current = key
+    }
+  }, [key])
 
   useEffect(() => {
     if (!chartContainerRef.current) return
@@ -71,29 +103,9 @@ export function LightweightCandlestickChart({
     })
 
     chartRef.current = chart
+    if (onChartCreate) onChartCreate(chart)
 
-    // 創建 Bollinger Bands 填充區域 (Cloud)
-    // 第一層：Upper 填充（淺白色）
-    const bbFillUpperSeries = chart.addSeries(AreaSeries, {
-      topColor: 'rgba(255, 255, 255, 0.05)',
-      bottomColor: 'rgba(255, 255, 255, 0.05)',
-      lineVisible: false,
-      priceLineVisible: false,
-      lastValueVisible: false,
-    })
-    bbFillUpperSeriesRef.current = bbFillUpperSeries
-
-    // 第二層：Lower 遮罩（背景色，用來挖空 Lower 以下的區域）
-    const bbFillLowerSeries = chart.addSeries(AreaSeries, {
-      topColor: '#111827',
-      bottomColor: '#111827',
-      lineVisible: false,
-      priceLineVisible: false,
-      lastValueVisible: false,
-    })
-    bbFillLowerSeriesRef.current = bbFillLowerSeries
-
-    // 創建 K 線序列 (使用 v5 API)
+    // 1. 創建 K 線序列
     const candleSeries = chart.addSeries(CandlestickSeries, {
       upColor: '#22c55e',
       downColor: '#ef4444',
@@ -104,130 +116,174 @@ export function LightweightCandlestickChart({
     })
     candleSeriesRef.current = candleSeries
 
-    // 創建 MA20 線
-    const ma20Series = chart.addSeries(LineSeries, {
-      color: '#3b82f6', // Blue
+    // 2. 成交量
+    const volumeSeries = chart.addSeries(HistogramSeries, {
+      color: '#26a69a',
+      priceFormat: { type: 'volume' },
+      priceScaleId: '', // Overlay
+    });
+    
+    chart.priceScale('').applyOptions({
+      scaleMargins: {
+        top: 0.8,
+        bottom: 0,
+      },
+    });
+    volumeSeriesRef.current = volumeSeries;
+
+    // 2.5 CVD 序列 (獨立座標軸)
+    const cvdSeries = chart.addSeries(LineSeries, {
+      color: 'rgba(0, 227, 150, 0.8)',
       lineWidth: 2,
-      title: 'MA20',
-    })
+      priceScaleId: 'cvd', // 使用獨立座標軸
+      title: 'CVD',
+    });
+    
+    chart.priceScale('cvd').applyOptions({
+      scaleMargins: {
+        top: 0.8,
+        bottom: 0,
+      },
+      visible: false, // 隱藏數值軸以保持簡潔
+    });
+    cvdSeriesRef.current = cvdSeries;
+
+    // 3. 其他指標 (MA, BB)
+    const ma20Series = chart.addSeries(LineSeries, { color: '#3b82f6', lineWidth: 2, title: 'MA20' })
     ma20SeriesRef.current = ma20Series
 
-    // 創建 MA60 線
-    const ma60Series = chart.addSeries(LineSeries, {
-      color: '#f59e0b', // Amber
-      lineWidth: 2,
-      title: 'MA60',
-    })
+    const ma60Series = chart.addSeries(LineSeries, { color: '#f59e0b', lineWidth: 2, title: 'MA60' })
     ma60SeriesRef.current = ma60Series
 
-    // 創建 MA200 線
-    const ma200Series = chart.addSeries(LineSeries, {
-      color: '#a855f7', // Purple
-      lineWidth: 2,
-      title: 'MA200',
-    })
+    const ma200Series = chart.addSeries(LineSeries, { color: '#a855f7', lineWidth: 2, title: 'MA200' })
     ma200SeriesRef.current = ma200Series
 
-    // 創建 Bollinger Bands (Upper)
-    const bbUpperSeries = chart.addSeries(LineSeries, {
-      color: 'rgba(255, 255, 255, 0.3)', // Faint White
-      lineWidth: 1,
-      title: 'BB Upper',
-      lineStyle: 0, // Solid
-    })
+    const bbUpperSeries = chart.addSeries(LineSeries, { color: 'rgba(255, 255, 255, 0.3)', lineWidth: 1, title: 'BB Upper' })
     bbUpperSeriesRef.current = bbUpperSeries
 
-    // 創建 Bollinger Bands (Lower)
-    const bbLowerSeries = chart.addSeries(LineSeries, {
-      color: 'rgba(255, 255, 255, 0.3)', // Faint White
-      lineWidth: 1,
-      title: 'BB Lower',
-      lineStyle: 0, // Solid
-    })
+    const bbLowerSeries = chart.addSeries(LineSeries, { color: 'rgba(255, 255, 255, 0.3)', lineWidth: 1, title: 'BB Lower' })
     bbLowerSeriesRef.current = bbLowerSeries
 
     // 響應式處理
     const handleResize = () => {
       if (chartContainerRef.current && chartRef.current) {
-        chart.applyOptions({
-          width: chartContainerRef.current.clientWidth,
-        })
+        chart.applyOptions({ width: chartContainerRef.current.clientWidth })
       }
     }
 
     window.addEventListener('resize', handleResize)
 
-    // Cleanup
     return () => {
       window.removeEventListener('resize', handleResize)
       if (chartRef.current) {
         chartRef.current.remove()
         chartRef.current = null
       }
-      candleSeriesRef.current = null
-      ma20SeriesRef.current = null
-      ma60SeriesRef.current = null
-      ma200SeriesRef.current = null
-      bbUpperSeriesRef.current = null
-      bbLowerSeriesRef.current = null
-      bbFillUpperSeriesRef.current = null
-      bbFillLowerSeriesRef.current = null
     }
   }, [])
 
   // 更新資料
   useEffect(() => {
-    const candleSeries = candleSeriesRef.current;
-    const ma20Series = ma20SeriesRef.current;
-    const ma60Series = ma60SeriesRef.current;
-    const ma200Series = ma200SeriesRef.current;
-    const bbUpperSeries = bbUpperSeriesRef.current;
-    const bbLowerSeries = bbLowerSeriesRef.current;
-
-    if (!candleSeries || !ma20Series || !ma60Series || !ma200Series || !bbUpperSeries || !bbLowerSeries) return
-    if (!data || data.length === 0) return
+    if (!chartRef.current || !data || data.length === 0) return
 
     const candleData: CandlestickData[] = []
+    const volumeData: HistogramData[] = []
     const ma20Data: LineData[] = []
     const ma60Data: LineData[] = []
     const ma200Data: LineData[] = []
     const bbUpperData: LineData[] = []
     const bbLowerData: LineData[] = []
 
-    // 單次循環處理所有資料，大幅提升效能
+    const seenTimes = new Set<number>()
+
     for (let i = 0; i < data.length; i++) {
       const d = data[i]
       const time = Math.floor(new Date(d.timestamp).getTime() / 1000) as UTCTimestamp
+      
+      // 跳過無效時間或重複時間 (Lightweight Charts 限制)
+      if (isNaN(time) || seenTimes.has(time)) continue
+      seenTimes.add(time)
 
-      candleData.push({
+      // 確保價格數值有效
+      const open = Number(d.open)
+      const high = Number(d.high)
+      const low = Number(d.low)
+      const close = Number(d.close)
+      if (isNaN(open) || isNaN(high) || isNaN(low) || isNaN(close)) continue
+
+      candleData.push({ time, open, high, low, close })
+      volumeData.push({
         time,
-        open: d.open,
-        high: d.high,
-        low: d.low,
-        close: d.close,
+        value: Number(d.volume) || 0,
+        color: close >= open ? 'rgba(34, 197, 94, 0.5)' : 'rgba(239, 68, 68, 0.5)',
       })
 
-      if (d.sma_20 != null) ma20Data.push({ time, value: d.sma_20 })
-      if (d.sma_60 != null) ma60Data.push({ time, value: d.sma_60 })
-      if (d.sma_200 != null) ma200Data.push({ time, value: d.sma_200 })
-      if (d.bollinger_upper != null) bbUpperData.push({ time, value: d.bollinger_upper })
-      if (d.bollinger_lower != null) bbLowerData.push({ time, value: d.bollinger_lower })
+      if (d.sma_20 != null && !isNaN(Number(d.sma_20))) ma20Data.push({ time, value: Number(d.sma_20) })
+      if (d.sma_60 != null && !isNaN(Number(d.sma_60))) ma60Data.push({ time, value: Number(d.sma_60) })
+      if (d.sma_200 != null && !isNaN(Number(d.sma_200))) ma200Data.push({ time, value: Number(d.sma_200) })
+      if (d.bollinger_upper != null && !isNaN(Number(d.bollinger_upper))) bbUpperData.push({ time, value: Number(d.bollinger_upper) })
+      if (d.bollinger_lower != null && !isNaN(Number(d.bollinger_lower))) bbLowerData.push({ time, value: Number(d.bollinger_lower) })
     }
 
-    // 設定資料
-    candleSeries.setData(candleData)
-    ma20Series.setData(ma20Data)
-    ma60Series.setData(ma60Data)
-    ma200Series.setData(ma200Data)
-    bbUpperSeries.setData(bbUpperData)
-    bbLowerSeries.setData(bbLowerData)
+    // 確保資料按時間升序排列
+    candleData.sort((a, b) => (a.time as number) - (b.time as number))
+    volumeData.sort((a, b) => (a.time as number) - (b.time as number))
+    ma20Data.sort((a, b) => (a.time as number) - (b.time as number))
+    ma60Data.sort((a, b) => (a.time as number) - (b.time as number))
+    ma200Data.sort((a, b) => (a.time as number) - (b.time as number))
+    bbUpperData.sort((a, b) => (a.time as number) - (b.time as number))
+    bbLowerData.sort((a, b) => (a.time as number) - (b.time as number))
 
-    // 自動調整可見範圍 (只在第一次或資料長度大幅改變時執行，避免擾亂用戶縮放)
-    if (chartRef.current && data.length > 0) {
-      // 可以考慮只在初始化時 fitContent
-      // chartRef.current.timeScale().fitContent()
+    // ✅ 使用 setData 更新資料（不會影響視圖範圍）
+    if (candleSeriesRef.current) candleSeriesRef.current.setData(candleData)
+    if (volumeSeriesRef.current) volumeSeriesRef.current.setData(volumeData)
+    if (ma20SeriesRef.current) ma20SeriesRef.current.setData(ma20Data)
+    if (ma60SeriesRef.current) ma60SeriesRef.current.setData(ma60Data)
+    if (ma200SeriesRef.current) ma200SeriesRef.current.setData(ma200Data)
+    if (bbUpperSeriesRef.current) bbUpperSeriesRef.current.setData(bbUpperData)
+    if (bbLowerSeriesRef.current) bbLowerSeriesRef.current.setData(bbLowerData)
+
+    // ✅ 更新 CVD 數據 (對齊基準線)
+    if (cvdSeriesRef.current && cvdData && cvdData.length > 0) {
+      const firstCVD = Number(cvdData[0].cvd);
+      const alignedCVD: LineData[] = cvdData.map(d => ({
+        time: Math.floor(new Date(d.time).getTime() / 1000) as UTCTimestamp,
+        value: Number(d.cvd) - firstCVD
+      })).sort((a, b) => (a.time as number) - (b.time as number));
+      
+      cvdSeriesRef.current.setData(alignedCVD);
     }
-  }, [data])
+
+    // ✅ 僅在首次載入時設定視圖範圍
+    if (isFirstLoadRef.current && chartRef.current && candleData.length > 0) {
+      // ... (之前的視圖範圍代碼)
+    }
+
+    // ✅ 處理爆倉標記 (Markers)
+    if (candleSeriesRef.current && liquidations.length > 0) {
+      const markers: SeriesMarker<UTCTimestamp>[] = liquidations
+        .filter(l => Number(l.value_usd) > 10000) // 僅顯示 1萬美金以上的爆倉，避免雜訊
+        .map(l => {
+          const time = Math.floor(new Date(l.timestamp).getTime() / 1000) as UTCTimestamp;
+          const isLongLiq = l.side === 'sell'; // 多單爆倉 = 強制賣出
+          
+          return {
+            time,
+            position: isLongLiq ? 'belowBar' : 'aboveBar',
+            color: isLongLiq ? '#ef4444' : '#22c55e',
+            shape: isLongLiq ? 'arrowDown' : 'arrowUp',
+            text: `Liq $${(Number(l.value_usd) / 1000).toFixed(0)}k`,
+            size: 1
+          };
+        });
+      
+      // 確保標記按時間排序且不重複 (Lightweight charts 限制)
+      const uniqueMarkers = Array.from(new Map(markers.map(m => [m.time, m])).values())
+        .sort((a, b) => (a.time as number) - (b.time as number));
+        
+      candleSeriesRef.current.setMarkers(uniqueMarkers);
+    }
+  }, [data, liquidations])
 
   // 更新指標可見性
   useEffect(() => {

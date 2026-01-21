@@ -9,7 +9,17 @@ export enum MessageType {
   ORDERBOOK_SNAPSHOT = 'orderbook_snapshot',
   ORDERBOOK_UPDATE = 'orderbook_update',
   KLINE = 'kline',
-  TICKER = 'ticker'
+  TICKER = 'ticker',
+  LIQUIDATION = 'liquidation'
+}
+
+// 爆倉數據
+export interface Liquidation {
+  symbol: string;
+  side: 'buy' | 'sell'; // Buy 代表空單爆倉(強制買入), Sell 代表多單爆倉(強制賣出)
+  price: number;
+  quantity: number;
+  timestamp: number;
 }
 
 // 交易數據
@@ -69,7 +79,7 @@ export interface Kline {
 export interface QueueMessage {
   type: MessageType;
   exchange: string;
-  data: Trade | OrderBookSnapshot | OrderBookUpdate | Kline;
+  data: Trade | OrderBookSnapshot | OrderBookUpdate | Kline | Liquidation;
   receivedAt: number;
 }
 

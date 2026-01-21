@@ -18,7 +18,7 @@ def test_funding_rate_collector():
     logger.info("=" * 50)
     
     # 初始化收集器
-    collector = FundingRateCollector('binance')
+    collector = FundingRateCollector('bybit')
     
     # 測試單一交易對
     symbol = 'BTCUSDT'
@@ -46,7 +46,7 @@ def test_funding_rate_collector():
     
     # 測試批次抓取
     logger.info("\n3. Batch fetching funding rates")
-    symbols = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT']
+    symbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT']
     try:
         batch_results = collector.fetch_funding_rates_batch(symbols)
         logger.info(f"✓ Fetched {len(batch_results)} funding rates")
@@ -72,7 +72,7 @@ def test_open_interest_collector():
     logger.info("=" * 50)
     
     # 初始化收集器
-    collector = OpenInterestCollector('binance')
+    collector = OpenInterestCollector('bybit')
     
     # 測試單一交易對
     symbol = 'BTCUSDT'
@@ -91,7 +91,7 @@ def test_open_interest_collector():
     
     # 測試批次抓取
     logger.info("\n2. Batch fetching open interest")
-    symbols = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT']
+    symbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT']
     try:
         batch_results = collector.fetch_open_interest_batch(symbols)
         logger.info(f"✓ Fetched {len(batch_results)} open interest records")
@@ -114,14 +114,14 @@ def test_database_integration():
     
     # 初始化
     db = DatabaseLoader()
-    fr_collector = FundingRateCollector('binance')
-    oi_collector = OpenInterestCollector('binance')
+    fr_collector = FundingRateCollector('bybit')
+    oi_collector = OpenInterestCollector('bybit')
     
     symbol = 'BTCUSDT'
     
     # 取得 market_id
     logger.info(f"\n1. Getting market_id for {symbol}")
-    market_id = db.get_market_id('binance', symbol)
+    market_id = db.get_market_id('bybit', symbol)
     logger.info(f"✓ Market ID: {market_id}")
     
     # 測試插入資金費率
@@ -149,7 +149,7 @@ def test_database_integration():
     symbols = ['BTCUSDT', 'ETHUSDT']
     try:
         for sym in symbols:
-            market_id = db.get_market_id('binance', sym)
+            market_id = db.get_market_id('bybit', sym)
             
             # 批次插入資金費率歷史
             history = fr_collector.fetch_funding_rate_history(sym, limit=3)

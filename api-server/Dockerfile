@@ -2,25 +2,33 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# 安裝依賴
-COPY package*.json ./
-RUN npm install
+# Copy package.json and lockfile from api-server directory
+COPY api-server/package*.json ./
+# Install dependencies strictly from lockfile
+RUN npm ci
 
-# 複製所有代碼 (已包含 src/shared_copy)
-COPY src ./src
-COPY tsconfig.json ./
+# Copy source code
+COPY api-server/src ./src
+COPY api-server/tsconfig.json ./
 
-# 編譯
+# Copy shared module to src/shared
+COPY shared ./src/shared
+
+# Build
 RUN npm run build
 
 FROM node:20-alpine
 
 WORKDIR /app
 
-# 複製產物與依賴
+# Copy package.json and lockfile
+COPY api-server/package*.json ./
+
+# Install only production dependencies
+RUN npm ci --omit=dev
+
+# Copy artifacts
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package*.json ./
 
 EXPOSE 8080
 

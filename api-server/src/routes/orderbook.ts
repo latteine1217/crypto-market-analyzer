@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { query } from '../database/pool';
 import { CacheService } from '../database/cache';
 import { logger } from '../utils/logger';
-import { RedisKeys } from '../shared_copy/utils/RedisKeys';
+import { RedisKeys } from '../shared/utils/RedisKeys';
 
 const router = Router();
 const cache = new CacheService(2); // 2 seconds cache for orderbook
@@ -39,22 +39,9 @@ router.get('/:exchange/:symbol', async (req: Request, res: Response) => {
 
     const marketId = marketResult.rows[0].id;
 
-    // 取得訂單簿快照
-    const result = await query(
-      `
-      SELECT
-        timestamp,
-        bids,
-        asks
-      FROM orderbook_snapshots
-      WHERE market_id = $1
-      ORDER BY timestamp DESC
-      LIMIT $2
-      `,
-      [marketId, limit]
-    );
-
-    const snapshots = result.rows;
+    // V3 Schema: orderbook_snapshots table was removed for performance.
+    // Return empty array for historical queries.
+    const snapshots: any[] = [];
     await cache.set(cacheKey, snapshots);
 
     res.json({ data: snapshots, cached: false });
@@ -95,24 +82,9 @@ router.get('/:exchange/:symbol/latest', async (req: Request, res: Response) => {
       return res.json({ data: cached, source: 'api_cache', cached: true });
     }
 
-    // 3. 從資料庫讀取 (Fallback)
-    const result = await query(
-      `
-      SELECT
-        obs.timestamp,
-        obs.bids,
-        obs.asks
-      FROM orderbook_snapshots obs
-      JOIN markets m ON obs.market_id = m.id
-      JOIN exchanges e ON m.exchange_id = e.id
-      WHERE e.name = $1 AND m.symbol = $2
-      ORDER BY obs.timestamp DESC
-      LIMIT 1
-      `,
-      [exchange, symbol]
-    );
-
-    const snapshot = result.rows[0] || null;
+    // 3. V3 Schema: orderbook_snapshots table was removed. 
+    // No DB fallback. Return null if not in Redis.
+    const snapshot = null;
     await cache.set(cacheKey, snapshot, 1); // 1 second cache
 
     res.json({ data: snapshot, cached: false });
