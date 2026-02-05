@@ -51,15 +51,23 @@ export class RedisQueue {
 
     try {
       const pipeline = this.client.pipeline();
+      const messageStr = JSON.stringify(message);
       
       // 推送到佇列尾端
-      pipeline.rpush(queueKey, JSON.stringify(message));
+      pipeline.rpush(queueKey, messageStr);
       
       // 設置 TTL
       pipeline.expire(queueKey, this.QUEUE_TTL);
       
       // 限制長度
       pipeline.ltrim(queueKey, -this.MAX_QUEUE_SIZE, -1);
+
+      // ✅ 同時發布訊息到 Pub/Sub 頻道，供 API Server 即時轉發給前端
+      // 頻道名稱格式：market_updates:{type}:{exchange}
+      const channel = `market_updates:${message.type}:${this.exchange}`;
+      pipeline.publish(channel, messageStr);
+      // 也發布到一個通用的頻道以便某些廣播使用
+      pipeline.publish('market_updates:all', messageStr);
 
       await pipeline.exec();
 

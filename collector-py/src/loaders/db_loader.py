@@ -7,7 +7,11 @@ import psycopg2
 from psycopg2 import pool
 from psycopg2.extras import execute_batch
 from typing import List, Dict, Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date, time
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
 from contextlib import contextmanager
 from loguru import logger
 
@@ -104,16 +108,27 @@ class DatabaseLoader:
                     base_asset, quote_asset = symbol.split('/')[0], 'USDT'
                 
                 normalized_symbol = normalize_symbol(symbol)
-                
-                # 3. 插入或查詢 market
-                # 邏輯與 Node.js Collector 對齊：Bybit/OKX 預設為 linear_perpetual
-                market_type = 'spot'
-                if exchange_name.lower() in ['bybit', 'okx']:
-                    market_type = 'linear_perpetual'
+
+                # ✅ 優先從 symbol_registry 尋找匹配
+                cur.execute("""
+                    SELECT market_type, base_asset, quote_asset 
+                    FROM symbol_registry 
+                    WHERE exchange_id = %s AND native_symbol = %s
+                """, (exchange_id, normalized_symbol))
+                reg_row = cur.fetchone()
+
+                if reg_row:
+                    market_type, base_asset, quote_asset = reg_row
+                else:
+                    # 3. 降級邏輯 (Heuristic)
+                    market_type = 'spot'
+                    if exchange_name.lower() in ['bybit', 'okx']:
+                        market_type = 'linear_perpetual'
+                    logger.warning(f"Symbol {normalized_symbol} not found in registry for {exchange_name}, using heuristics.")
 
                 cur.execute("""
-                    INSERT INTO markets (exchange_id, symbol, base_asset, quote_asset, market_type)
-                    VALUES (%s, %s, %s, %s, %s)
+                    INSERT INTO markets (exchange_id, symbol, base_asset, quote_asset, market_type, is_active)
+                    VALUES (%s, %s, %s, %s, %s, FALSE)
                     ON CONFLICT (exchange_id, symbol) DO UPDATE SET
                         base_asset = EXCLUDED.base_asset,
                         quote_asset = EXCLUDED.quote_asset,
@@ -319,27 +334,6 @@ class DatabaseLoader:
                 conn.commit()
         return len(rows)
 
-    def insert_news_batch(self, news_data: List[Dict]) -> int:
-        """批次插入新聞數據 (V3 Schema: time 欄位)"""
-        if not news_data: return 0
-        self.ensure_connection()
-        import json
-        rows = []
-        for news in news_data:
-            rows.append((news['published_at'], news['title'], news['url'], news['source_domain'], news.get('kind', 'news'),
-                         news.get('votes_positive', 0), news.get('votes_negative', 0), news.get('votes_important', 0),
-                         json.dumps(news.get('currencies', [])), json.dumps(news.get('metadata', {}))))
-
-        with self.get_connection() as conn:
-            with conn.cursor() as cur:
-                execute_batch(cur, """
-                    INSERT INTO news (time, title, url, source_domain, kind, votes_positive, votes_negative, votes_important, currencies, metadata)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (url) DO UPDATE SET votes_positive = EXCLUDED.votes_positive, votes_negative = EXCLUDED.votes_negative
-                """, rows)
-                conn.commit()
-        return len(rows)
-
     def insert_fear_greed_index(self, data: Dict) -> int:
         """插入 Fear & Greed Index (global_indicators)"""
         self.ensure_connection()
@@ -359,7 +353,22 @@ class DatabaseLoader:
         self.ensure_connection()
         import json
         rows = []
+        etf_tz = ZoneInfo("America/New_York") if ZoneInfo else timezone.utc
         for flow in etf_flows_data:
+            timestamp = flow.get('timestamp')
+            if not timestamp:
+                flow_date = flow.get('date')
+                if isinstance(flow_date, datetime):
+                    timestamp = flow_date
+                elif isinstance(flow_date, date):
+                    timestamp = datetime.combine(flow_date, time(16, 0), tzinfo=etf_tz)
+                else:
+                    timestamp = datetime.now(timezone.utc)
+            if isinstance(timestamp, datetime) and timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=etf_tz)
+            if isinstance(timestamp, datetime):
+                timestamp = timestamp.astimezone(timezone.utc)
+
             metadata = {
                 'product_name': flow.get('product_name'),
                 'issuer': flow.get('issuer'),
@@ -367,7 +376,7 @@ class DatabaseLoader:
                 'total_aum_usd': flow.get('total_aum_usd'),
                 'date': str(flow.get('date'))
             }
-            rows.append((flow['timestamp'], 'etf', flow['product_code'], flow['net_flow_usd'], json.dumps(metadata)))
+            rows.append((timestamp, 'etf', flow['product_code'], flow['net_flow_usd'], json.dumps(metadata)))
         
         with self.get_connection() as conn:
             with conn.cursor() as cur:
@@ -378,21 +387,6 @@ class DatabaseLoader:
                 """, rows)
                 conn.commit()
         return len(rows)
-
-    def insert_fred_indicator(self, data: Dict) -> int:
-        """插入 FRED 指標 (global_indicators)"""
-        self.ensure_connection()
-        import json
-        metadata = {'series_name': data['series_name'], 'unit': data.get('unit'), 'frequency': data['frequency']}
-        with self.get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO global_indicators (time, category, name, value, metadata)
-                    VALUES (%s, 'macro', %s, %s, %s)
-                    ON CONFLICT (time, category, name) DO UPDATE SET value = EXCLUDED.value, metadata = EXCLUDED.metadata
-                """, (data['timestamp'], data['series_id'], data['value'], json.dumps(metadata)))
-                conn.commit()
-        return 1
 
     def insert_liquidations_batch(self, liquidations_data: List[Dict]) -> int:
         """批次插入爆倉數據"""

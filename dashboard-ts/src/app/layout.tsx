@@ -1,12 +1,9 @@
 import type { Metadata } from 'next'
-import { Inter } from 'next/font/google'
 import './globals.css'
 import { Navbar } from '@/components/Navbar'
 import { Providers } from '@/components/Providers'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { GlobalAlertsListener } from '@/components/GlobalAlertsListener'
-
-const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
   title: 'Crypto Market Dashboard',
@@ -20,7 +17,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className={`${inter.className} bg-background text-foreground min-h-screen`}>
+      <body className="bg-background text-foreground min-h-screen font-sans">
         <Providers>
           <ErrorBoundary>
             <GlobalAlertsListener />

@@ -10,13 +10,13 @@ import type {
   RichListStat,
   Alert,
   DataQualityMetrics,
-  NewsItem,
   Event,
   UpcomingEventsResponse,
   FearGreedData,
   ETFFlowSummary,
   ETFProduct,
-  ETFIssuer
+  ETFIssuer,
+  ETFFlowAnalyticsResponse
 } from '@/types/market';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
@@ -93,14 +93,6 @@ export const fetchMarketPrices = async (): Promise<MarketPrice[]> => {
 
 export const fetchMarketQuality = async (): Promise<DataQualityMetrics[]> => {
   const response = await apiClient.get<{ data: DataQualityMetrics[] }>('/markets/quality');
-  return response.data.data;
-};
-
-// News API
-export const fetchNews = async (currency?: string): Promise<NewsItem[]> => {
-  const response = await apiClient.get<{ data: NewsItem[] }>('/news', {
-    params: { currency }
-  });
   return response.data.data;
 };
 
@@ -185,6 +177,25 @@ export const fetchLatestOrderbook = async (
   return response.data.data;
 };
 
+export interface OBIData {
+  time: string;
+  obi: number;
+  spread: number;
+  mid_price: number;
+}
+
+export const fetchOBI = async (
+  exchange: string,
+  symbol: string,
+  limit: number = 100
+): Promise<OBIData[]> => {
+  const response = await apiClient.get<{ data: OBIData[] }>(
+    `/orderbook/${exchange}/${symbol}`,
+    { params: { limit } }
+  );
+  return response.data.data;
+};
+
 // Derivatives API
 export const fetchFundingRate = async (
   exchange: string,
@@ -248,6 +259,23 @@ export const fetchRichList = async (
   return response.data.data;
 };
 
+export interface WhaleTransaction {
+  timestamp: string;
+  tx_hash: string;
+  from_addr: string;
+  to_addr: string;
+  amount_usd: number;
+  asset: string;
+  blockchain: string;
+}
+
+export const fetchWhaleTransactions = async (limit: number = 50): Promise<WhaleTransaction[]> => {
+  const response = await apiClient.get<{ data: WhaleTransaction[] }>('/blockchain/whales/recent', {
+    params: { limit }
+  });
+  return response.data.data;
+};
+
 // Fear & Greed API
 export const fetchFearGreed = async (): Promise<FearGreedData | null> => {
   const response = await apiClient.get<{ data: FearGreedData | null }>('/fear-greed/latest');
@@ -274,6 +302,13 @@ export const fetchTopIssuers = async (asset: string, days: number): Promise<ETFI
     params: { asset, days }
   });
   return response.data.data;
+};
+
+export const fetchETFAnalytics = async (asset: string, days: number): Promise<ETFFlowAnalyticsResponse> => {
+  const response = await apiClient.get<ETFFlowAnalyticsResponse>('/etf-flows/analytics', {
+    params: { asset, days }
+  });
+  return response.data;
 };
 
 // Alerts API

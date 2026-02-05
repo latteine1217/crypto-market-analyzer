@@ -30,9 +30,27 @@ class BitInfoChartsClient:
             if not dfs:
                 logger.error("No tables found in BitInfoCharts response")
                 return None
-                
-            # 通常第一個表格是分佈表
-            dist_df = dfs[0]
+
+            # 選擇包含 balance/addresses/btc 的分佈表，避免頁面結構變動
+            dist_df = None
+            for df in dfs:
+                cols = [str(c).strip().lower() for c in df.columns]
+                if any('balance' in c for c in cols) and any('address' in c for c in cols) and any('btc' in c or 'coin' in c for c in cols):
+                    dist_df = df
+                    break
+            if dist_df is None:
+                logger.error("Distribution table not found in BitInfoCharts response")
+                return None
+
+            # 轉為可控欄位名稱
+            dist_df.columns = [str(c).strip() for c in dist_df.columns]
+            col_map = {str(c).strip().lower(): c for c in dist_df.columns}
+
+            balance_col = next((col_map[c] for c in col_map if 'balance' in c), dist_df.columns[0])
+            address_col = next((col_map[c] for c in col_map if 'address' in c), dist_df.columns[1])
+            btc_col = next((col_map[c] for c in col_map if 'btc' in c or 'coin' in c), dist_df.columns[min(3, len(dist_df.columns) - 1)])
+            usd_col = next((col_map[c] for c in col_map if 'usd' in c or '$' in c), None)
+            pct_col = next((col_map[c] for c in col_map if '%' in c), None)
             
             stats = []
             
@@ -40,18 +58,18 @@ class BitInfoChartsClient:
             for index, row in dist_df.iterrows():
                 try:
                     # Balance range (e.g., "[100 - 1,000)")
-                    balance_range = str(row.iloc[0]).strip()
+                    balance_range = str(row.get(balance_col, '')).strip()
                     # 跳過 header 或 footer
                     if not balance_range or 'Balance' in balance_range or 'Total' in balance_range:
                         continue
                     
                     # Addresses (e.g. "13560")
-                    addr_count_raw = str(row.iloc[1])
+                    addr_count_raw = str(row.get(address_col, ''))
                     # 有時候會有額外文字，只取數字
                     addr_count = int(re.sub(r'[^\d]', '', addr_count_raw))
                     
                     # Total BTC (e.g. "4,200,000 BTC")
-                    btc_raw = str(row.iloc[3])
+                    btc_raw = str(row.get(btc_col, ''))
                     # 去除 ' BTC' 和逗號
                     if 'BTC' in btc_raw:
                         btc_val = btc_raw.split('BTC')[0]
@@ -61,12 +79,12 @@ class BitInfoChartsClient:
                     btc_amount = float(re.sub(r'[^\d.]', '', btc_val))
                     
                     # USD (e.g. "$100,000,000")
-                    usd_raw = str(row.iloc[4])
-                    usd_amount = float(re.sub(r'[^\d.]', '', usd_raw))
+                    usd_raw = str(row.get(usd_col, '')) if usd_col else ''
+                    usd_amount = float(re.sub(r'[^\d.]', '', usd_raw)) if usd_raw else 0.0
                     
                     # % Total Supply (e.g. "25% (90%)")
                     # 我們只取第一部分 (該區間佔比)
-                    pct_raw = str(row.iloc[5])
+                    pct_raw = str(row.get(pct_col, '')) if pct_col else ''
                     if '%' in pct_raw:
                          pct_val = pct_raw.split('%')[0]
                          pct_supply = float(re.sub(r'[^\d.]', '', pct_val))

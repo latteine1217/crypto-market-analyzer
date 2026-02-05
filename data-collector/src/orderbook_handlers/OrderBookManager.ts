@@ -14,7 +14,7 @@ import {
 export class OrderBookManager {
   private orderBooks: Map<string, OrderBookState> = new Map();
   private readonly SNAPSHOT_INTERVAL_MS = 60000; // 每分鐘生成一次快照
-  private readonly MAX_DEPTH = 20; // 保留的訂單簿深度
+  private readonly MAX_DEPTH = 100; // 提升探測深度至 100 檔
 
   constructor(private exchange: string = 'bybit') {
     log.info(`OrderBookManager initialized for ${exchange}`);
@@ -62,7 +62,7 @@ export class OrderBookManager {
       const params = {
         category: 'linear',
         symbol: symbol,
-        limit: 50
+        limit: 100
       };
 
       const response = await axios.get(url, { params });
@@ -124,6 +124,10 @@ export class OrderBookManager {
     this.applyBidsUpdate(state.bids, update.bids);
     this.applyAsksUpdate(state.asks, update.asks);
 
+    // ✅ 核心修復：執行內存修剪 (Pruning)
+    // 防止遠離盤口的過時價位在 Map 中無限堆積，導致 OBI 計算失真
+    this.pruneOrderBook(state);
+
     state.lastUpdateId = update.lastUpdateId;
     state.updateCount++;
 
@@ -131,16 +135,38 @@ export class OrderBookManager {
   }
 
   /**
+   * 修剪訂單簿內存，僅保留盤口附近的檔位
+   */
+  private pruneOrderBook(state: OrderBookState): void {
+    const KEEP_DEPTH = 200; // 內存中每邊最多保留 200 檔
+
+    if (state.bids.size > KEEP_DEPTH + 20) {
+      const sortedPrices = Array.from(state.bids.keys()).sort((a, b) => b - a);
+      const toRemove = sortedPrices.slice(KEEP_DEPTH);
+      for (const price of toRemove) {
+        state.bids.delete(price);
+      }
+    }
+
+    if (state.asks.size > KEEP_DEPTH + 20) {
+      const sortedPrices = Array.from(state.asks.keys()).sort((a, b) => a - b);
+      const toRemove = sortedPrices.slice(KEEP_DEPTH);
+      for (const price of toRemove) {
+        state.asks.delete(price);
+      }
+    }
+  }
+
+  /**
    * 應用 Bids 更新
    */
   private applyBidsUpdate(bids: Map<number, number>, updates: PriceLevel[]): void {
     for (const { price, quantity } of updates) {
-      if (quantity === 0) {
-        // 數量為 0 表示刪除該價位
+      const qty = Number(quantity);
+      if (qty <= 0) {
         bids.delete(price);
       } else {
-        // 更新或新增價位
-        bids.set(price, quantity);
+        bids.set(price, qty);
       }
     }
   }
@@ -150,10 +176,11 @@ export class OrderBookManager {
    */
   private applyAsksUpdate(asks: Map<number, number>, updates: PriceLevel[]): void {
     for (const { price, quantity } of updates) {
-      if (quantity === 0) {
+      const qty = Number(quantity);
+      if (qty <= 0) {
         asks.delete(price);
       } else {
-        asks.set(price, quantity);
+        asks.set(price, qty);
       }
     }
   }
@@ -179,12 +206,38 @@ export class OrderBookManager {
       .slice(0, depth)
       .map(([price, quantity]) => ({ price, quantity }));
 
+    // 計算 OBI (取 Top 20 檔位 - 深度優化)
+    const obiDepth = 20;
+    
+    // 安全檢查：深度不足時不計算 OBI (避免 -98% 這種極端異常)
+    if (sortedBids.length < 5 || sortedAsks.length < 5) {
+      log.warn(`Insufficient depth for OBI calculation for ${symbol}: bids=${sortedBids.length}, asks=${sortedAsks.length}`);
+      return {
+        symbol,
+        timestamp: Date.now(),
+        lastUpdateId: state.lastUpdateId,
+        bids: sortedBids,
+        asks: sortedAsks,
+        obi: 0 // Return neutral OBI instead of extreme value
+      };
+    }
+
+    const bidVolume = sortedBids.slice(0, obiDepth).reduce((sum, b) => sum + Number(b.quantity), 0);
+    const askVolume = sortedAsks.slice(0, obiDepth).reduce((sum, a) => sum + Number(a.quantity), 0);
+    const obi = (bidVolume + askVolume) > 0 ? (bidVolume - askVolume) / (bidVolume + askVolume) : 0;
+    
+    // 異常值監控
+    if (Math.abs(obi) > 0.9) {
+      log.warn(`Extreme OBI detected for ${symbol}: ${obi.toFixed(4)} (BidVol: ${bidVolume}, AskVol: ${askVolume})`);
+    }
+
     return {
       symbol,
       timestamp: Date.now(),
       lastUpdateId: state.lastUpdateId,
       bids: sortedBids,
-      asks: sortedAsks
+      asks: sortedAsks,
+      obi: parseFloat(obi.toFixed(4))
     };
   }
 

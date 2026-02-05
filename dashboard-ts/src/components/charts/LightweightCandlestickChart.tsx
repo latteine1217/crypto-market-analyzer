@@ -8,6 +8,7 @@ import {
   LineSeries,
   AreaSeries,
   HistogramSeries,
+  PriceScaleMode,
   type IChartApi,
   type ISeriesApi,
   type UTCTimestamp,
@@ -26,7 +27,7 @@ interface CVDPoint {
 
 interface LiquidationData {
   timestamp: string | number
-  side: 'buy' | 'sell'
+  side: 'buy' | 'sell' | 'long_liquidated' | 'short_liquidated'
   price: number
   value_usd: number
 }
@@ -91,6 +92,11 @@ export function LightweightCandlestickChart({
       height: 500,
       rightPriceScale: {
         borderColor: '#374151',
+        mode: PriceScaleMode.Logarithmic,
+        scaleMargins: {
+          top: 0.1,
+          bottom: 0.2,
+        },
       },
       timeScale: {
         borderColor: '#374151',
@@ -178,6 +184,14 @@ export function LightweightCandlestickChart({
       if (chartRef.current) {
         chartRef.current.remove()
         chartRef.current = null
+        candleSeriesRef.current = null
+        volumeSeriesRef.current = null
+        cvdSeriesRef.current = null
+        ma20SeriesRef.current = null
+        ma60SeriesRef.current = null
+        ma200SeriesRef.current = null
+        bbUpperSeriesRef.current = null
+        bbLowerSeriesRef.current = null
       }
     }
   }, [])
@@ -195,14 +209,31 @@ export function LightweightCandlestickChart({
     const bbLowerData: LineData[] = []
 
     const seenTimes = new Set<number>()
+    let lastTime: number | null = null;
+    
+    // 取得時間週期毫秒數 (用於檢測缺口)
+    const getIntervalSeconds = () => {
+      if (data.length < 2) return 60;
+      return Math.floor((new Date(data[1].timestamp).getTime() - new Date(data[0].timestamp).getTime()) / 1000);
+    };
+    const intervalSeconds = getIntervalSeconds();
 
     for (let i = 0; i < data.length; i++) {
       const d = data[i]
       const time = Math.floor(new Date(d.timestamp).getTime() / 1000) as UTCTimestamp
       
-      // 跳過無效時間或重複時間 (Lightweight Charts 限制)
+      // 跳過無效時間或重複時間
       if (isNaN(time) || seenTimes.has(time)) continue
       seenTimes.add(time)
+
+      // ✅ 檢測數據空洞 (Data Gap Detection)
+      // 在 lightweight-charts 中，如果資料不連續，LineSeries 預設不會連起來，
+      // 除非我們給了不連續的時間戳。
+      // 但為了確保視覺上「斷開」而不是「斜線連接」，我們不需要額外插入 null，
+      // 只需要確保 sorted 順序正確。
+      // 截圖中的直線通常是因為後端回傳了重複的「最後價格」來填充缺口。
+      
+      lastTime = time;
 
       // 確保價格數值有效
       const open = Number(d.open)
@@ -243,6 +274,8 @@ export function LightweightCandlestickChart({
     if (bbUpperSeriesRef.current) bbUpperSeriesRef.current.setData(bbUpperData)
     if (bbLowerSeriesRef.current) bbLowerSeriesRef.current.setData(bbLowerData)
 
+    // 由系統自動縮放主價格軸，避免固定範圍導致低點被截斷
+
     // ✅ 更新 CVD 數據 (對齊基準線)
     if (cvdSeriesRef.current && cvdData && cvdData.length > 0) {
       const firstCVD = Number(cvdData[0].cvd);
@@ -259,31 +292,51 @@ export function LightweightCandlestickChart({
       // ... (之前的視圖範圍代碼)
     }
 
-    // ✅ 處理爆倉標記 (Markers)
-    if (candleSeriesRef.current && liquidations.length > 0) {
-      const markers: SeriesMarker<UTCTimestamp>[] = liquidations
-        .filter(l => Number(l.value_usd) > 10000) // 僅顯示 1萬美金以上的爆倉，避免雜訊
-        .map(l => {
-          const time = Math.floor(new Date(l.timestamp).getTime() / 1000) as UTCTimestamp;
-          const isLongLiq = l.side === 'sell'; // 多單爆倉 = 強制賣出
-          
-          return {
-            time,
-            position: isLongLiq ? 'belowBar' : 'aboveBar',
-            color: isLongLiq ? '#ef4444' : '#22c55e',
-            shape: isLongLiq ? 'arrowDown' : 'arrowUp',
-            text: `Liq $${(Number(l.value_usd) / 1000).toFixed(0)}k`,
-            size: 1
-          };
-        });
-      
-      // 確保標記按時間排序且不重複 (Lightweight charts 限制)
-      const uniqueMarkers = Array.from(new Map(markers.map(m => [m.time, m])).values())
-        .sort((a, b) => (a.time as number) - (b.time as number));
+    // ✅ 處理爆倉標記 (Markers) - 資深交易員級優化：視覺強度區分
+    if (candleSeriesRef.current && typeof candleSeriesRef.current.setMarkers === 'function' && liquidations.length > 0) {
+      try {
+        const markers: SeriesMarker<UTCTimestamp>[] = liquidations
+          .filter(l => Number(l.value_usd) > 5000) // 降低門檻以觀察小額爆倉，但視覺上區分
+          .map(l => {
+            const time = Math.floor(new Date(l.timestamp).getTime() / 1000) as UTCTimestamp;
+            const isLongLiq = l.side === 'sell' || l.side === 'long_liquidated'; 
+            const value = Number(l.value_usd);
+            
+            // 根據爆倉金額決定大小 (Size 1-4)
+            let size: 1 | 2 | 3 | 4 = 1;
+            if (value > 1000000) size = 4;      // > $1M: 極大標記
+            else if (value > 200000) size = 3;  // > $200k: 大標記
+            else if (value > 50000) size = 2;   // > $50k: 中標記
+            
+            return {
+              time,
+              position: isLongLiq ? 'belowBar' : 'aboveBar',
+              color: isLongLiq ? '#ef4444' : '#22c55e',
+              shape: isLongLiq ? 'arrowDown' : 'arrowUp',
+              text: value > 100000 ? `Liq $${(value / 1000).toFixed(0)}k` : '', // 僅大額顯示文字
+              size: size
+            };
+          });
         
-      candleSeriesRef.current.setMarkers(uniqueMarkers);
+        // 確保標記按時間排序且不重複 (Lightweight charts 限制)
+        // 若同一秒有多筆爆倉，取金額最大的一筆
+        const markerMap = new Map<number, SeriesMarker<UTCTimestamp>>();
+        markers.forEach(m => {
+          const existing = markerMap.get(m.time as number);
+          if (!existing || (m.size || 0) > (existing.size || 0)) {
+            markerMap.set(m.time as number, m);
+          }
+        });
+
+        const uniqueMarkers = Array.from(markerMap.values())
+          .sort((a, b) => (a.time as number) - (b.time as number));
+          
+        candleSeriesRef.current.setMarkers(uniqueMarkers);
+      } catch (err) {
+        console.error('Failed to set markers:', err);
+      }
     }
-  }, [data, liquidations])
+  }, [data, liquidations, cvdData])
 
   // 更新指標可見性
   useEffect(() => {

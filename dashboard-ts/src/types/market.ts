@@ -49,6 +49,7 @@ export interface MarketPrice {
   volume_24h: number
   high_24h?: number
   low_24h?: number
+  funding_rate?: number
 }
 
 export interface MarketSummary {
@@ -166,24 +167,10 @@ export interface DataQualityMetrics {
   backfill_task_created: boolean
 }
 
-export interface NewsItem {
-  id: number
-  external_id: number
-  title: string
-  url: string
-  source_domain: string
-  published_at: string
-  votes_positive: number
-  votes_negative: number
-  votes_important: number
-  currencies: { code: string; title: string }[]
-  kind: string
-}
-
 // Events Types
 export interface Event {
   id: number
-  source: 'fred_calendar' | 'coinmarketcal'
+  source: 'coinmarketcal' | 'federal_reserve' | string
   event_type: string
   title: string
   description?: string
@@ -244,4 +231,43 @@ export interface ETFIssuer {
   product_count: number;
   total_net_flow_usd: number;
   avg_daily_flow_usd: number;
+}
+
+export interface ETFFlowAnalyticsRow {
+  date: string;
+  total_net_flow_usd: number;
+  cumulative_flow_usd: number;
+  product_count: number;
+  btc_close: number | null;
+  net_flow_btc: number | null;
+  flow_pct_aum: number | null;
+  flow_pct_20d_avg: number | null;
+  flow_zscore: number | null;
+  flow_shock: boolean;
+  issuer_concentration_top1: number | null;
+  issuer_concentration_top2: number | null;
+  issuer_concentration_top3: number | null;
+  gbtc_vs_ibit_divergence: number | null;
+  price_change: number | null;
+  price_divergence: 'price_up_outflow' | 'price_down_inflow' | null;
+}
+
+export interface ETFWeeklyDivergence {
+  week_start: string;
+  divergence_usd: number;
+}
+
+export interface ETFFlowAnalyticsMeta {
+  inflow_streak: number;
+  outflow_streak: number;
+  latest_flow: number;
+  last_update_time: string | null;
+  staleness_hours: number | null;
+  quality_status: 'fresh' | 'stale';
+  weekly_divergence: ETFWeeklyDivergence[];
+}
+
+export interface ETFFlowAnalyticsResponse {
+  data: ETFFlowAnalyticsRow[];
+  meta: ETFFlowAnalyticsMeta;
 }

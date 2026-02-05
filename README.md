@@ -8,7 +8,7 @@
 ## 🎯 核心特性
 
 ### 🚀 V3 架構優化 (v3.0+)
-- **資料高度整合**: 廢除碎片化表結構，將宏觀 (FRED)、情緒 (FearGreed)、ETF 數據統合成 `global_indicators` 泛用指標表。
+- **資料高度整合**: 廢除碎片化表結構，將情緒 (FearGreed)、ETF 數據統合成 `global_indicators` 泛用指標表。
 - **高效查詢**: 減少多表 Join，API 回傳延遲降低 50% 以上。
 - **系統精簡**: 移除重型監控棧 (Grafana/Prometheus)，系統資源消耗降低 60%，實現「輕量化運行」。
 - **TimescaleDB 壓縮**: 全面啟用列式壓縮與自動數據保留政策 (Retention Policies)。
@@ -17,14 +17,14 @@
 - **交易所支援**: Bybit (REST + WebSocket)。
 - **原生格式化**: Symbol 全面採用 `BTCUSDT` 格式，移除了陳舊的格式轉換邏輯。
 - **衍生品監控**: 即時追蹤 Funding Rate、Open Interest 及 Long/Short Ratio。
-- **全球指標**: 整合 FRED 美國經濟數據、恐懼貪婪指數與 BTC/ETH ETF 資金流向。
+- **全球指標**: 整合恐懼貪婪指數與 BTC/ETH ETF 資金流向。
 
 ## 🏗️ 系統架構
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │                        Data Sources                           │
-│              Bybit API        FRED/SoSo                       │
+│              Bybit API        ETF/FearGreed                   │
 └────────────┬─────────────────────────────┬───────────────────┘
              │                             │
         REST API                      WebSocket

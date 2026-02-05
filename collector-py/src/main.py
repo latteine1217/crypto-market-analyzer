@@ -8,6 +8,10 @@ import sys
 from pathlib import Path
 from loguru import logger
 from apscheduler.schedulers.blocking import BlockingScheduler
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
 
 # 添加 src 到 Python 路徑
 sys.path.insert(0, str(Path(__file__).parent))
@@ -24,16 +28,15 @@ from monitors.signal_monitor import SignalMonitor
 from tasks.ohlcv_tasks import collect_ohlcv_task
 from tasks.derivative_tasks import run_funding_rate_task, run_open_interest_task
 from tasks.external_tasks import (
-    run_news_task, 
     run_rich_list_task, 
     run_whale_task,
     run_events_task,
     run_fear_greed_task,
-    run_fred_task,
-    run_etf_flows_task
+    run_etf_flows_task,
+    run_etf_freshness_task
 )
 from tasks.maintenance_tasks import (
-    run_quality_check_task, run_backfill_task
+    run_quality_check_task, run_backfill_task, run_cvd_calibration_task
 )
 
 # 配置日誌
@@ -91,6 +94,7 @@ class ConfigDrivenCollector:
             'misfire_grace_time': 3600  # 錯過執行窗口後 1 小時內仍可執行
         }
         scheduler = BlockingScheduler(job_defaults=job_defaults)
+        etf_tz = ZoneInfo("America/New_York") if ZoneInfo else None
 
         # 資料收集任務
         scheduler.add_job(self.run_collection_cycle, 'interval', seconds=settings.collector_interval_seconds, id='ohlcv_collect')
@@ -107,7 +111,6 @@ class ConfigDrivenCollector:
         )
         
         # 外部數據任務（增加更長的容忍時間）
-        scheduler.add_job(lambda: run_news_task(self.orchestrator), 'interval', minutes=30, id='news_collect')
         scheduler.add_job(
             lambda: run_rich_list_task(self.orchestrator), 
             'cron', hour=0, minute=15, 
@@ -119,21 +122,21 @@ class ConfigDrivenCollector:
         # Phase 1: Macro Indicators 任務
         scheduler.add_job(lambda: run_fear_greed_task(self.orchestrator), 'interval', hours=6, id='fear_greed_collect')  # 每 6 小時
         scheduler.add_job(
-            lambda: run_fred_task(self.orchestrator), 
-            'cron', day_of_week='mon', hour=12, minute=0, 
-            id='fred_collect',
-            misfire_grace_time=86400  # FRED: 24 小時容忍窗口（週資料）
-        )
-        scheduler.add_job(
             lambda: run_etf_flows_task(self.orchestrator), 
-            'cron', hour=10, minute=0, 
+            'cron', hour=17, minute=15, timezone=etf_tz,
             id='etf_flows_collect',
             misfire_grace_time=7200  # ETF: 2 小時容忍窗口
+        )
+        scheduler.add_job(
+            lambda: run_etf_freshness_task(self.orchestrator),
+            'interval', hours=1,
+            id='etf_freshness_check'
         )
         
         # 維護任務
         scheduler.add_job(self.signal_monitor.scan, 'interval', minutes=5, id='signal_scan')
         scheduler.add_job(lambda: run_quality_check_task(self.orchestrator), 'interval', minutes=10, id='quality_check')
+        scheduler.add_job(lambda: run_cvd_calibration_task(self.orchestrator), 'interval', minutes=15, id='cvd_calibration')
         scheduler.add_job(lambda: run_backfill_task(self.orchestrator), 'interval', minutes=5, id='backfill')
 
         logger.info(f"Scheduler started with {len(scheduler.get_jobs())} jobs.")

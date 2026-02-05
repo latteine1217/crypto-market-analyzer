@@ -43,18 +43,6 @@ def init_events():
         }
     ]
     
-    # 模擬一些 CPI 發布 (每月中旬)
-    for month in [1, 2, 3, 4]:
-        events.append({
-            "source": "fred_calendar",
-            "event_type": "cpi",
-            "title": f"Consumer Price Index (CPI) - {datetime(2026, month, 1).strftime('%B %Y')}",
-            "time": f"2026-{month:02d}-12 13:30:00",
-            "country": "US",
-            "impact": "high",
-            "description": "Monthly inflation data measuring changes in consumer prices"
-        })
-
     try:
         with db.get_connection() as conn:
             with conn.cursor() as cur:

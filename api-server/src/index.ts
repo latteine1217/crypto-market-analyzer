@@ -12,15 +12,14 @@ import { orderbookRoutes } from './routes/orderbook';
 import { derivativesRoutes } from './routes/derivatives';
 import { blockchainRoutes } from './routes/blockchain';
 import { alertRoutes } from './routes/alerts';
-import { newsRoutes } from './routes/news';
 import { analyticsRoutes } from './routes/analytics';
 import { eventsRoutes } from './routes/events';
 import sentimentRoutes from './routes/sentiment';
 import etfRoutes from './routes/etf';
-import fredRoutes from './routes/fred';
 import { statusRoutes } from './routes/status';
 import pool from './database/pool';
 import { startAlertMonitor } from './services/alertService';
+import { startRealtimeService } from './services/realtimeService';
 import { SocketService } from './services/socketService';
 import { PostgresTransport } from './utils/PostgresTransport';
 
@@ -60,12 +59,10 @@ app.use('/api/orderbook', orderbookRoutes);
 app.use('/api/derivatives', derivativesRoutes);
 app.use('/api/blockchain', blockchainRoutes);
 app.use('/api/alerts', alertRoutes);
-app.use('/api/news', newsRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/events', eventsRoutes);
 app.use('/api/fear-greed', sentimentRoutes);
 app.use('/api/etf-flows', etfRoutes);
-app.use('/api/fred', fredRoutes);
 app.use('/api/status', statusRoutes);
 
 // Error handling
@@ -80,6 +77,7 @@ app.use(errorHandler);
       
       // Start background services
       startAlertMonitor();
+      startRealtimeService();
     });
   } catch (error) {
     logger.error('Failed to start API Server due to migration error:', error);

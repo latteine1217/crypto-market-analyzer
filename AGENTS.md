@@ -29,7 +29,7 @@
 **核心任務**：
 - **多維度資料收集**:
   - **交易所市場數據**: Bybit OHLCV, Trades, Orderbook 即時抓取
-  - **總體經濟與資金流**: FRED 總經指標、美國現貨 ETF 流量 (Farside)、鏈上數據
+- **總體經濟與資金流**: 美國現貨 ETF 流量 (Farside)、鏈上數據
   - **市場情緒**: Fear & Greed Index 等情緒指標追蹤
 - **標準化存儲**: 資料統一格式後寫入 TimescaleDB，並實施資料保留政策 (Retention Policies)
 - **即時視覺化**: 提供高效、易讀的 K 線圖與深度圖，支援多種技術指標與時區切換
@@ -57,7 +57,7 @@
 ### 2. Data Collector Agent
 - 負責多源異質資料抓取 (REST / WS / Web Scraping)
   - **Crypto Market**: OHLCV, Orderbook, Trades (Bybit)
-  - **Macro & Flows**: FRED, Farside ETF Data, Fear & Greed Index
+- **Macro & Flows**: Farside ETF Data, Fear & Greed Index
 - 必須遵循 Rate Limit 與 Timeout 限制，具備重試機制
 - 確保 Symbol 解析符合專案統一標準 (`shared/utils/symbol_utils.py`)
 - 任務配置化 (`configs/collector/*.yml`)，不寫死
@@ -163,5 +163,4 @@ npm test (在各專案目錄下)
 
 **最後更新**: 2026-01-21  
 **維護原則**: 本文件聚焦核心哲學與架構規則，實施細節請查閱 `docs/SESSION_LOG.md`
-
 

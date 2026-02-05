@@ -13,14 +13,24 @@ mkdir -p /app/logs
 echo "📊 [Startup] Backfilling Bybit historical data..."
 python /app/scripts/backfill_history.py
 
-# 2. 初始化全球指標 (Fear&Greed, FRED, ETF)
-echo "🔄 [Startup] Initializing global indicators..."
-python /app/scripts/init_global_indicators.py
+# 2. 初始化全球指標 (Fear&Greed, ETF)
+# 設置 60 秒超時,避免爬蟲卡死阻塞主程式啟動
+echo "🔄 [Startup] Initializing global indicators (with 60s timeout)..."
+timeout 60 python /app/scripts/init_global_indicators.py || echo "⚠️  Global indicators init timed out or failed, continuing..."
 
 # 2.5 初始化衍生品歷史 (Funding & OI)
 echo "📈 [Startup] Backfilling Derivatives history (Funding & OI)..."
 python /app/scripts/backfill_funding.py
 python /app/scripts/backfill_oi.py
+
+# 2.5.1 補全成交與爆倉數據 (修復斷線缺口)
+echo "🔥 [Startup] Backfilling Liquidations and Trades..."
+python /app/scripts/backfill_liquidations.py
+python /app/scripts/backfill_trades.py
+
+# 2.5.2 執行 CVD 基準線校準
+echo "⚖️ [Startup] Calibrating CVD baseline..."
+python /app/scripts/calibrate_cvd.py
 
 # 2.6 初始化事件日曆 (Upcoming Events)
 echo "📅 [Startup] Initializing Market Events..."

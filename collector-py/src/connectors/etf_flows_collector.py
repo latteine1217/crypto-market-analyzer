@@ -58,7 +58,7 @@ class SoSoValueETFCollector:
     """
     SoSoValue ETF Collector
     
-    狀態：部分功能（Mock Data）
+    狀態：停用（不允許 demo/mock 資料）
     原因：SoSoValue API 需要商業授權
     
     替代方案：
@@ -71,82 +71,26 @@ class SoSoValueETFCollector:
         self.api_key = api_key
         logger.warning(
             "SoSoValue API requires commercial license. "
-            "Using mock data for testing. "
+            "Mock data is disabled. "
             "Please consider: https://www.coinglass.com/api"
         )
     
     def fetch_bitcoin_etf_flows(self, days: int = 7) -> List[Dict]:
         """
-        抓取 Bitcoin ETF 流向（目前返回 Mock Data）
+        抓取 Bitcoin ETF 流向（停用，返回空資料）
         
         實際實施時需替換為：
         1. CoinGlass API 調用
         2. SoSoValue API（需授權）
         3. Web Scraper
         """
-        logger.info(f"Generating mock Bitcoin ETF data for last {days} days...")
-        
-        # 主要 Bitcoin ETF 產品
-        products = [
-            {'code': 'IBIT', 'name': 'iShares Bitcoin Trust', 'issuer': 'BlackRock'},
-            {'code': 'FBTC', 'name': 'Fidelity Wise Origin Bitcoin Fund', 'issuer': 'Fidelity'},
-            {'code': 'GBTC', 'name': 'Grayscale Bitcoin Trust', 'issuer': 'Grayscale'},
-            {'code': 'BITB', 'name': 'Bitwise Bitcoin ETF', 'issuer': 'Bitwise'},
-        ]
-        
-        results = []
-        today = date.today()
-        
-        for i in range(days):
-            flow_date = today - timedelta(days=i)
-            
-            for product in products:
-                # 模擬資金流向（隨機但合理的範圍）
-                base_flow = random.uniform(-50, 100)  # 百萬美元
-                
-                results.append({
-                    'date': flow_date,
-                    'product_code': product['code'],
-                    'product_name': product['name'],
-                    'issuer': product['issuer'],
-                    'asset_type': 'BTC',
-                    'net_flow_usd': base_flow * 1_000_000,  # 轉換為美元
-                    'total_aum_usd': random.uniform(1, 10) * 1_000_000_000  # 10億級 AUM
-                })
-        
-        logger.info(f"Generated {len(results)} mock Bitcoin ETF records")
-        return results
+        logger.warning("SoSoValue BTC ETF flow fetch is disabled without API access.")
+        return []
     
     def fetch_ethereum_etf_flows(self, days: int = 7) -> List[Dict]:
-        """抓取 Ethereum ETF 流向（Mock Data）"""
-        logger.info(f"Generating mock Ethereum ETF data for last {days} days...")
-        
-        products = [
-            {'code': 'ETHE', 'name': 'Grayscale Ethereum Trust', 'issuer': 'Grayscale'},
-            {'code': 'FETH', 'name': 'Fidelity Ethereum Fund', 'issuer': 'Fidelity'},
-        ]
-        
-        results = []
-        today = date.today()
-        
-        for i in range(days):
-            flow_date = today - timedelta(days=i)
-            
-            for product in products:
-                base_flow = random.uniform(-20, 50)
-                
-                results.append({
-                    'date': flow_date,
-                    'product_code': product['code'],
-                    'product_name': product['name'],
-                    'issuer': product['issuer'],
-                    'asset_type': 'ETH',
-                    'net_flow_usd': base_flow * 1_000_000,
-                    'total_aum_usd': random.uniform(0.5, 3) * 1_000_000_000
-                })
-        
-        logger.info(f"Generated {len(results)} mock Ethereum ETF records")
-        return results
+        """抓取 Ethereum ETF 流向（停用，返回空資料）"""
+        logger.warning("SoSoValue ETH ETF flow fetch is disabled without API access.")
+        return []
     
     def fetch_all_etf_flows(self, days: int = 7) -> List[Dict]:
         """抓取所有 ETF 流向"""
@@ -156,7 +100,7 @@ class SoSoValueETFCollector:
     
     def run_collection(self, db_loader, days: int = 7) -> int:
         """執行收集任務"""
-        logger.warning("⚠️  Using MOCK DATA for ETF flows")
+        logger.warning("⚠️  ETF mock data disabled. No collection performed.")
         logger.info("To use real data, consider:")
         logger.info("  1. CoinGlass API: https://www.coinglass.com/api")
         logger.info("  2. Manual CSV import from SoSoValue")

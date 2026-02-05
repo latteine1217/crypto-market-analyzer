@@ -22,7 +22,7 @@ test-all: ## 執行所有測試
 # === Docker 管理 ===
 # 初始化全球指標資料 (修復 Dashboard 空白問題)
 init-indicators:
-	@echo "Initializing Global Indicators (Fear&Greed, FRED)..."
+	@echo "Initializing Global Indicators (Fear&Greed)..."
 	docker-compose exec -T collector python /app/scripts/init_global_indicators.py
 
 status: ## 查看容器狀態

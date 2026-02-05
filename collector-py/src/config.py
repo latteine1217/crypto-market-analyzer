@@ -29,9 +29,9 @@ class Settings(BaseSettings):
     binance_api_key: str = Field(default="", alias="BINANCE_API_KEY")
     binance_api_secret: str = Field(default="", alias="BINANCE_API_SECRET")
 
-    # External APIs (Phase 1: Macro Indicators)
-    fred_api_key: str = Field(default="", alias="FRED_API_KEY")
-    cryptopanic_api_key: str = Field(default="", alias="CRYPTOPANIC_API_KEY")
+    # Telegram Notification
+    tg_bot_token: str = Field(default="", alias="TG_BOT_TOKEN")
+    tg_chat_id: str = Field(default="", alias="TG_CHAT_ID")
 
     # Collector
     collector_interval_seconds: int = Field(default=60, alias="COLLECTOR_INTERVAL_SECONDS")

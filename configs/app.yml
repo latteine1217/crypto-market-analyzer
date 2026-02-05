@@ -30,7 +30,7 @@ monitoring:
   metrics_export_port: ${METRICS_PORT:8000}
   
   alerts:
-    telegram_enabled: false
+    telegram_enabled: true
     quality_threshold: ${QUALITY_THRESHOLD:80}
 
 # 預設收集參數

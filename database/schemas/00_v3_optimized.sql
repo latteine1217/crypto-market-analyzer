@@ -235,22 +235,6 @@ CREATE TABLE IF NOT EXISTS events (
     CONSTRAINT events_unique_source_type_time_title UNIQUE (source, event_type, time, title)
 );
 
-CREATE TABLE IF NOT EXISTS news (
-    time            TIMESTAMPTZ NOT NULL,
-    title           TEXT NOT NULL,
-    url             TEXT UNIQUE,
-    source          TEXT,
-    source_domain   TEXT,
-    kind            TEXT,
-    votes_positive  INT DEFAULT 0,
-    votes_negative  INT DEFAULT 0,
-    votes_important INT DEFAULT 0,
-    sentiment       NUMERIC,
-    currencies      JSONB,
-    metadata        JSONB,
-    PRIMARY KEY (time, url)
-);
-
 -- 價格告警
 CREATE TABLE IF NOT EXISTS price_alerts (
     id SERIAL PRIMARY KEY,
@@ -275,7 +259,6 @@ SELECT create_hypertable('global_indicators', 'time', chunk_time_interval => INT
 SELECT create_hypertable('whale_transactions', 'time', chunk_time_interval => INTERVAL '7 days', if_not_exists => TRUE);
 SELECT create_hypertable('address_tier_snapshots', 'time', chunk_time_interval => INTERVAL '30 days', if_not_exists => TRUE);
 SELECT create_hypertable('system_logs', 'time', chunk_time_interval => INTERVAL '7 days', if_not_exists => TRUE);
-SELECT create_hypertable('news', 'time', chunk_time_interval => INTERVAL '30 days', if_not_exists => TRUE);
 SELECT create_hypertable('liquidations', 'time', chunk_time_interval => INTERVAL '1 day', if_not_exists => TRUE);
 SELECT create_hypertable('market_signals', 'time', chunk_time_interval => INTERVAL '7 days', if_not_exists => TRUE);
 SELECT create_hypertable('api_error_logs', 'timestamp', chunk_time_interval => INTERVAL '7 days', if_not_exists => TRUE);
@@ -415,5 +398,111 @@ SELECT id, 'BTCUSDT', 'BTC', 'USDT', 'spot' FROM exchanges WHERE name = 'bybit'
 ON CONFLICT DO NOTHING;
 
 INSERT INTO markets (exchange_id, symbol, base_asset, quote_asset, market_type)
+
 SELECT id, 'ETHUSDT', 'ETH', 'USDT', 'spot' FROM exchanges WHERE name = 'bybit'
+
+ON CONFLICT DO NOTHING;
+
+
+
+-- ============================================
+
+-- 實戰補強：Orderbook 存儲與 CVD 校準
+
+-- ============================================
+
+
+
+-- 1. Orderbook 快照表 (優化版：僅存儲 Top N)
+
+CREATE TABLE IF NOT EXISTS orderbook_snapshots (
+
+    market_id   INT NOT NULL REFERENCES markets(id) ON DELETE CASCADE,
+
+    time        TIMESTAMPTZ NOT NULL,
+
+    bids        JSONB NOT NULL, -- 格式: [[price, qty], ...]
+
+    asks        JSONB NOT NULL,
+
+    spread      NUMERIC,
+
+    mid_price   NUMERIC,
+
+    PRIMARY KEY (market_id, time)
+
+);
+
+
+
+-- 轉換為 Hypertable (1小時一個 chunk)
+
+SELECT create_hypertable('orderbook_snapshots', 'time', chunk_time_interval => INTERVAL '1 hour', if_not_exists => TRUE);
+
+
+
+-- 設置壓縮政策 (2小時後壓縮)
+
+ALTER TABLE orderbook_snapshots SET (timescaledb.compress, timescaledb.compress_segmentby = 'market_id');
+
+SELECT add_compression_policy('orderbook_snapshots', INTERVAL '2 hours', if_not_exists => TRUE);
+
+
+
+-- 設置保留政策 (僅保留 7 天)
+
+SELECT add_retention_policy('orderbook_snapshots', INTERVAL '7 days', if_not_exists => TRUE);
+
+
+
+-- 2. CVD 校準錨點表 (解決漂移問題)
+
+CREATE TABLE IF NOT EXISTS market_anchors (
+
+    market_id       INT NOT NULL REFERENCES markets(id) ON DELETE CASCADE,
+
+    time            TIMESTAMPTZ NOT NULL,
+
+    anchor_type     TEXT NOT NULL, -- 'volume_24h', 'turnover_24h'
+
+    value           NUMERIC NOT NULL,
+
+    system_cvd      NUMERIC,       
+
+    PRIMARY KEY (market_id, time, anchor_type)
+
+);
+
+
+
+SELECT create_hypertable('market_anchors', 'time', chunk_time_interval => INTERVAL '7 days', if_not_exists => TRUE);
+
+-- ============================================
+-- 實戰補強：SymbolRegistry 與 OBI
+-- ============================================
+
+-- 1. 全域符號註冊表
+CREATE TABLE IF NOT EXISTS symbol_registry (
+    internal_symbol     TEXT PRIMARY KEY,  -- 統一格式: BTC_USDT_PERP
+    exchange_id         INT REFERENCES exchanges(id),
+    native_symbol       TEXT NOT NULL,     -- 交易所格式: BTCUSDT (Bybit)
+    market_type         TEXT NOT NULL,     -- 'spot', 'linear_perpetual'
+    base_asset          TEXT NOT NULL,
+    quote_asset         TEXT NOT NULL,
+    is_active           BOOLEAN DEFAULT TRUE,
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (exchange_id, native_symbol)
+);
+
+-- 2. 為 Orderbook 增加 OBI 欄位
+ALTER TABLE orderbook_snapshots ADD COLUMN IF NOT EXISTS obi NUMERIC;
+-- 增加索引以便快速查詢 OBI 極端值
+CREATE INDEX IF NOT EXISTS idx_orderbook_obi ON orderbook_snapshots (obi);
+
+-- 插入初始數據 (Bybit 範例)
+INSERT INTO symbol_registry (internal_symbol, exchange_id, native_symbol, market_type, base_asset, quote_asset)
+SELECT 'BTC_USDT_PERP', id, 'BTCUSDT', 'linear_perpetual', 'BTC', 'USDT' FROM exchanges WHERE name = 'bybit'
+ON CONFLICT DO NOTHING;
+INSERT INTO symbol_registry (internal_symbol, exchange_id, native_symbol, market_type, base_asset, quote_asset)
+SELECT 'ETH_USDT_PERP', id, 'ETHUSDT', 'linear_perpetual', 'ETH', 'USDT' FROM exchanges WHERE name = 'bybit'
 ON CONFLICT DO NOTHING;

@@ -267,29 +267,56 @@ router.get('/aggregated/open-interest/latest', async (req: Request, res: Respons
 router.get('/funding-rate/heatmap', async (req: Request, res: Response) => {
   try {
     const hours = parseInt(String(req.query.hours || '72')) || 72;
-    const cacheKey = cache.makeKey('funding-heatmap', hours);
+    const limit = Math.min(parseInt(String(req.query.limit || '10')) || 10, 50);
+    const cacheKey = cache.makeKey('funding-heatmap', hours, limit);
     const cached = await cache.get(cacheKey);
     
     if (cached) {
       return res.json({ data: cached, cached: true });
     }
 
-    // 取得熱門交易對最近 N 小時的費率
-    // 對齊到 8 小時 (標準結算時間)
+    // [Matrix Integrity Strategy] 
+    // 使用 CROSS JOIN 生成「時間 x 幣種」的完整網格，確保熱力圖無空洞
     const result = await query(
       `
+      WITH RECURSIVE time_series AS (
+        SELECT time_bucket('8 hours', NOW() - ($1 || ' hours')::INTERVAL) as bucket
+        UNION ALL
+        SELECT bucket + INTERVAL '8 hours'
+        FROM time_series
+        WHERE bucket + INTERVAL '8 hours' <= NOW()
+      ),
+      target_symbols AS (
+        SELECT m.id, m.symbol
+        FROM ohlcv o
+        JOIN markets m ON o.market_id = m.id
+        JOIN exchanges e ON m.exchange_id = e.id
+        WHERE e.name = 'bybit'
+          AND m.market_type = 'linear_perpetual'
+          AND m.is_active = TRUE
+          AND o.timeframe = '1m'
+          AND o.time >= NOW() - INTERVAL '24 hours'
+        GROUP BY m.id, m.symbol
+        ORDER BY SUM(o.volume) DESC
+        LIMIT $2
+      ),
+      grid AS (
+        SELECT ts.bucket, s.symbol, s.id as market_id
+        FROM time_series ts
+        CROSS JOIN target_symbols s
+      )
       SELECT
-        time_bucket('8 hours', mm.time) as bucket,
-        m.symbol,
-        AVG(mm.value) as avg_rate
-      FROM market_metrics mm
-      JOIN markets m ON mm.market_id = m.id
-      WHERE mm.name = 'funding_rate'
-        AND mm.time >= NOW() - ($1 || ' hours')::INTERVAL
-      GROUP BY bucket, m.symbol
-      ORDER BY bucket ASC, m.symbol ASC
+        g.bucket,
+        g.symbol,
+        COALESCE(AVG(mm.value), 0) as avg_rate
+      FROM grid g
+      LEFT JOIN market_metrics mm ON g.market_id = mm.market_id 
+        AND mm.name = 'funding_rate'
+        AND time_bucket('8 hours', mm.time) = g.bucket
+      GROUP BY g.bucket, g.symbol
+      ORDER BY g.bucket ASC, g.symbol ASC
       `,
-      [hours]
+      [hours, limit]
     );
 
     // 格式化為 Heatmap 所需的矩陣

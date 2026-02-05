@@ -47,6 +47,7 @@ export interface OrderBookSnapshot {
   lastUpdateId?: number;
   bids: PriceLevel[];
   asks: PriceLevel[];
+  obi?: number; // Order Book Imbalance
 }
 
 // 訂單簿增量更新

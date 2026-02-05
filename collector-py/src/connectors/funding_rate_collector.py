@@ -72,7 +72,7 @@ class FundingRateCollector:
                 'symbol': normalize_symbol(symbol),
                 'funding_rate': float(info.get('fundingRate', 0)) if info.get('fundingRate') else None,
                 'predicted_funding_rate': float(info.get('predictedFundingRate', 0)) if info.get('predictedFundingRate') else None,
-                'funding_time': None,
+                'funding_time': datetime.now(tz=timezone.utc),  # 當前採集時間
                 'next_funding_time': None,
                 'funding_interval': None,
                 'mark_price': float(ticker.get('markPrice')) if ticker.get('markPrice') else None,
@@ -127,6 +127,7 @@ class FundingRateCollector:
 
                     res = {
                         'symbol': norm_symbol,
+                        'funding_time': datetime.now(tz=timezone.utc),  # 當前採集時間
                         'funding_rate': funding_rate,
                         'predicted_funding_rate': float(info.get('predictedFundingRate', 0)) if info.get('predictedFundingRate') else None,
                         'funding_rate_daily': (funding_rate * 3) if funding_rate is not None else 0,

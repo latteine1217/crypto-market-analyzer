@@ -87,6 +87,7 @@ export function OpenInterestChart({ data, onChartCreate, key }: Props) {
     return () => {
       window.removeEventListener('resize', handleResize)
       if (chartRef.current) {
+        // 通知外部實例已銷毀 (如果需要，可傳入 null)
         chartRef.current.remove()
         chartRef.current = null
       }
@@ -112,12 +113,9 @@ export function OpenInterestChart({ data, onChartCreate, key }: Props) {
     if (uniqueData.length > 0) {
       series.setData(uniqueData)
       
+      // 💡 移除 fitContent()，讓時間軸由外部同步邏輯控制
       requestAnimationFrame(() => {
         if (chartRef.current) {
-          // 💡 強制讓時間軸適應內容
-          chartRef.current.timeScale().fitContent();
-          
-          // 💡 強制讓價格軸不包含 0 (透過 applyOptions 局部覆寫)
           chartRef.current.priceScale('right').applyOptions({
             autoScale: true,
           } as any);
@@ -132,12 +130,14 @@ export function OpenInterestChart({ data, onChartCreate, key }: Props) {
         <div className="flex gap-2">
           <span className="text-gray-500">Latest OI (USD):</span>
           <span className="text-purple-400 font-bold">
-            ${(latestOIUSD / 1e6).toFixed(2)}M
+            {latestOIUSD > 0 ? `$${(latestOIUSD / 1e6).toFixed(2)}M` : 'N/A'}
           </span>
         </div>
         <div className="flex gap-2">
           <span className="text-gray-500">Latest OI (Coin):</span>
-          <span className="text-gray-200 font-bold">{latestOI.toLocaleString()}</span>
+          <span className="text-gray-200 font-bold">
+            {latestOI > 0 ? latestOI.toLocaleString() : 'N/A'}
+          </span>
         </div>
       </div>
       <div ref={chartContainerRef} className="w-full" />

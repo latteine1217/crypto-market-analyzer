@@ -146,7 +146,6 @@ verify_schema() {
         "address_tier_snapshots"
         "system_logs"
         "events"
-        "news"
         "price_alerts"
         "backfill_tasks"
         "data_quality_summary"

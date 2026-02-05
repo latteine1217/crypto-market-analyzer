@@ -14,10 +14,8 @@ from config_loader import CollectorConfig
 from connectors.bybit_rest import BybitClient
 from connectors.funding_rate_collector import FundingRateCollector
 from connectors.open_interest_collector import OpenInterestCollector
-from connectors.cryptopanic_collector import CryptoPanicCollector
 from connectors.bitinfocharts import BitInfoChartsClient
 from connectors.fear_greed_collector import FearGreedIndexCollector
-from connectors.fred_collector import FREDCollector
 from connectors.farside_etf_collector import FarsideInvestorsETFCollector
 from connectors.whale_collector import WhaleCollector
 from connectors.exchange_pool import ExchangePool
@@ -53,13 +51,11 @@ class CollectorOrchestrator:
         self.connectors = {}
         self.funding_rate_collectors = {}
         self.open_interest_collectors = {}
-        self.news_collector = CryptoPanicCollector()
         self.rich_list_collector = BitInfoChartsClient()
         self.whale_collector = WhaleCollector()
         
         # Phase 1: Macro Indicators Collectors
         self.fear_greed_collector = FearGreedIndexCollector()
-        self.fred_collector = FREDCollector(api_key=settings.fred_api_key if settings.fred_api_key else None)
         self.etf_flows_collector = FarsideInvestorsETFCollector(use_selenium=True)
         
         self._init_connectors()

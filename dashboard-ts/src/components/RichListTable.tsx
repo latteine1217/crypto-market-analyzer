@@ -7,7 +7,6 @@ import type { RichListStat } from '@/types/market'
 
 interface Props {
   data: RichListStat[]
-  demoMode?: boolean // 如果為 true，使用演示數據展示 UI 效果
 }
 
 // 定義目標層級
@@ -21,18 +20,41 @@ const TARGET_TIERS = [
 export function RichListTable({ data }: Props) {
   // 處理數據邏輯
   const processedData = useMemo(() => {
-    // 檢查資料是否足夠
-    if (!data || data.length === 0) {
+    // --- 準備數據源 ---
+    let sourceData = data || []
+
+    if (sourceData.length === 0) {
       return { dates: [], rows: [] }
     }
 
     // --- 真實數據處理邏輯 ---
     
-    // 1. 按日期分組
+    const parseRange = (rawGroup: string) => {
+      const cleaned = rawGroup.replace(/[\[\]\(\)]/g, '').replace(/,/g, '').trim()
+      if (!cleaned) return null
+      if (cleaned.includes('-')) {
+        const parts = cleaned.split('-').map(p => p.trim())
+        const min = parseFloat(parts[0])
+        const max = parseFloat(parts[1])
+        if (Number.isFinite(min) && Number.isFinite(max)) return { min, max }
+      }
+      if (cleaned.includes('+')) {
+        const min = parseFloat(cleaned.replace('+', '').trim())
+        if (Number.isFinite(min)) return { min, max: Infinity }
+      }
+      return null
+    }
+
+    const isExactTier = (range: { min: number; max: number }, tier: { min: number; max: number }) => {
+      if (tier.max === Infinity) return range.min === tier.min && range.max === Infinity
+      return range.min === tier.min && range.max === tier.max
+    }
+
+    // 1. 按日期分組（使用 UTC 日期，避免時區導致重複）
     const groupedByDate: Record<string, RichListStat[]> = {}
-    data.forEach(d => {
-      // 忽略時間，只看日期
-      const dateStr = new Date(d.snapshot_date).toLocaleDateString()
+    sourceData.forEach(d => {
+      if (!d || !d.snapshot_date) return
+      const dateStr = new Date(d.snapshot_date).toISOString().split('T')[0]
       if (!groupedByDate[dateStr]) groupedByDate[dateStr] = []
       groupedByDate[dateStr].push(d)
     })
@@ -40,9 +62,8 @@ export function RichListTable({ data }: Props) {
     // 排序日期 (新到舊)
     const sortedDates = Object.keys(groupedByDate).sort((a, b) => new Date(b).getTime() - new Date(a).getTime())
     
-    // 取最近 5 天，如果數據不足則取所有可用天數
-    // 最少需要 2 天才能計算變化
-    const displayDates = sortedDates.slice(0, Math.min(5, sortedDates.length))
+    // 取最近 5 天
+    const displayDates = sortedDates.slice(0, 5)
     
     // 格式化日期標頭 (e.g., 1/14)
     const dateHeaders = displayDates.map(d => 
@@ -51,53 +72,58 @@ export function RichListTable({ data }: Props) {
 
     // 2. 聚合層級數據
     const rows = TARGET_TIERS.map(tier => {
-      // 計算每一天的該層級總量
       const dailyBalances = displayDates.map(date => {
         const dayStats = groupedByDate[date] || []
-        
-        // 篩選屬於該層級的 stats 並加總
-        const total = dayStats.reduce((sum, stat) => {
-          // 解析 rank_group (e.g. "[100 - 1,000)" or "(0 - 0.00001)")
-          // 移除逗號，提取第一個數字作為範圍下限
-          const clean = stat.rank_group.replace(/,/g, '')
-          
-          // 匹配開頭的數字（整數或小數）
-          // 例如: "[100 - 1000)" -> 100, "(0 - 0.00001)" -> 0, "[1000 - 10000)" -> 1000
-          const match = clean.match(/^[\(\[](\d+(?:\.\d+)?)\s*-/)
-          const rangeMin = match ? parseFloat(match[1]) : 0
-          
-          // 判斷是否屬於當前目標層級
-          if (rangeMin >= tier.min && (tier.max === Infinity || rangeMin < tier.max)) {
-            return sum + Number(stat.total_balance)
+
+        // 去重：同一天同一 range 只取最新一筆
+        const latestByRange = new Map<string, RichListStat>()
+        dayStats.forEach(stat => {
+          const key = stat.rank_group || ''
+          const existing = latestByRange.get(key)
+          if (!existing) {
+            latestByRange.set(key, stat)
+            return
           }
+          const existingTime = new Date(existing.snapshot_date).getTime()
+          const currentTime = new Date(stat.snapshot_date).getTime()
+          if (currentTime > existingTime) {
+            latestByRange.set(key, stat)
+          }
+        })
+
+        const normalizedStats = Array.from(latestByRange.values())
+
+        // 若存在精確區間，直接使用（避免重複加總子區間）
+        const exactRow = normalizedStats.find(stat => {
+          const range = parseRange(stat.rank_group || '')
+          return range ? isExactTier(range, tier) : false
+        })
+        if (exactRow) return Number(exactRow.total_balance)
+
+        // 否則聚合子區間（完全落在該 tier 範圍內）
+        const total = normalizedStats.reduce((sum, stat) => {
+          const range = parseRange(stat.rank_group || '')
+          if (!range) return sum
+          const within = range.min >= tier.min && (tier.max === Infinity || range.max <= tier.max)
+          if (within) return sum + Number(stat.total_balance)
           return sum
         }, 0)
-        
+
         return total
       })
 
-      // 3. 計算變化量 (Diff)
-      // changes[0] = Day0 - Day1
-      // changes[1] = Day1 - Day2 ...
+      // 3. 計算變化量
       const changes = dailyBalances.map((balance, i) => {
-        // 最後一天沒有前一天可對比，或者如果沒有上一筆數據
         if (i === dailyBalances.length - 1) return 0 
         const prevBalance = dailyBalances[i + 1]
-        // 如果數據不完整 (0)，則無變化
         if (balance === 0 || prevBalance === 0) return 0
-        
         return balance - prevBalance
       })
-      
-      // 移除最後一個 "0" (因為它是最舊的一天，無法計算變化，表格上我們通常不顯示最舊那一天的變化，或者只顯示 N-1 個變化欄位)
-      // 但根據圖片，日期欄位下方顯示的是「該日相對於昨日」的變化。
-      // 所以如果顯示 5 個日期，最後一個日期 (最舊) 通常無法顯示變化，除非我們抓了 6 天的資料。
-      // 這裡簡單處理：顯示 0
 
       return {
         tier: tier.label,
-        totalHeld: dailyBalances[0], // 最新總持倉
-        changes: changes
+        totalHeld: dailyBalances[0], 
+        changes: changes.slice(0, -1) // 最後一個日期無法計算變化
       }
     })
 

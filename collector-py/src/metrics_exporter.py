@@ -124,6 +124,25 @@ class CollectorMetrics:
             ['exchange', 'symbol', 'timeframe']
         )
 
+        # ========== ETF 資料新鮮度 ==========
+        self.etf_latest_timestamp = Gauge(
+            'collector_etf_latest_timestamp',
+            'Latest ETF flow timestamp (UTC)',
+            ['asset']
+        )
+
+        self.etf_staleness_seconds = Gauge(
+            'collector_etf_staleness_seconds',
+            'Seconds since latest ETF flow update',
+            ['asset']
+        )
+
+        self.etf_unknown_products_total = Counter(
+            'collector_etf_unknown_products_total',
+            'Total number of unknown ETF product codes detected',
+            ['asset', 'product_code']
+        )
+
         # ========== 資料庫操作 ==========
         # 資料庫寫入操作
         self.db_writes_total = Counter(
@@ -317,6 +336,18 @@ class CollectorMetrics:
             symbol=symbol,
             timeframe=timeframe
         ).set(timestamp)
+
+    def update_etf_latest_timestamp(self, asset: str, timestamp: float):
+        """更新 ETF 最新時間"""
+        self.etf_latest_timestamp.labels(asset=asset).set(timestamp)
+
+    def update_etf_staleness_seconds(self, asset: str, seconds: float):
+        """更新 ETF 新鮮度（秒）"""
+        self.etf_staleness_seconds.labels(asset=asset).set(seconds)
+
+    def record_etf_unknown_product(self, asset: str, product_code: str):
+        """記錄未知 ETF 產品代碼"""
+        self.etf_unknown_products_total.labels(asset=asset, product_code=product_code).inc()
 
     def record_db_write(
         self,

@@ -21,7 +21,7 @@ const FundingRateHeatmap: React.FC = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const response = await axios.get('/api/derivatives/funding-rate/heatmap?hours=168'); // 7 days
+        const response = await axios.get('/api/derivatives/funding-rate/heatmap?hours=168&limit=10'); // 7 days, top 10
         setData(response.data.data);
       } catch (error) {
         console.error('Failed to fetch funding heatmap:', error);

@@ -12,11 +12,51 @@ interface SignalTimelineProps {
 export const SignalTimeline: React.FC<SignalTimelineProps> = ({ symbol, limit = 50 }) => {
   const [signals, setSignals] = useState<MarketSignal[]>([]);
   const [loading, setLoading] = useState(true);
+  const [lastSignalTime, setLastSignalTime] = useState<number>(0);
+
+  // ✅ 使用 AudioContext 產生電子通知音 (避免外部資源依賴)
+  const playAlertSound = (severity: string) => {
+    try {
+      const AudioContextClass = (window as any).AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContextClass) return;
+      
+      const ctx = new AudioContextClass();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = severity === 'critical' ? 'sawtooth' : 'sine';
+      osc.frequency.setValueAtTime(severity === 'critical' ? 440 : 880, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(110, ctx.currentTime + 0.1);
+
+      gain.gain.setValueAtTime(0.1, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.1);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start();
+      osc.stop(ctx.currentTime + 0.1);
+    } catch (e) {
+      console.error('Audio alert failed', e);
+    }
+  };
 
   const loadSignals = async () => {
     try {
-      // 這裡假設 api-client 有 fetchSignals 方法
       const data = await fetchSignals(symbol, limit);
+      
+      // ✅ 檢查是否有新信號
+      if (data.length > 0) {
+        const latestTime = new Date(data[0].time).getTime();
+        if (lastSignalTime !== 0 && latestTime > lastSignalTime) {
+          // 僅對高嚴重級別信號播放聲音
+          if (data[0].severity === 'critical' || data[0].severity === 'warning') {
+            playAlertSound(data[0].severity);
+          }
+        }
+        setLastSignalTime(latestTime);
+      }
+      
       setSignals(data);
     } catch (error) {
       console.error('Failed to load signals', error);
@@ -32,12 +72,14 @@ export const SignalTimeline: React.FC<SignalTimelineProps> = ({ symbol, limit = 
   }, [symbol, limit]);
 
   const getSignalIcon = (type: string, side: string) => {
-    if (type.includes('divergence')) {
+    const safeType = type || '';
+    if (safeType.includes('divergence')) {
       return side === 'bullish' ? '📈' : '📉';
     }
-    if (type === 'oi_spike') return '🔥';
+    if (safeType === 'oi_spike') return '🔥';
     if (type === 'liquidation_cascade') return '💀';
     if (type === 'funding_extreme') return '💰';
+    if (type === 'obi_extreme') return '⚖️';
     return '🔔';
   };
 
@@ -71,33 +113,37 @@ export const SignalTimeline: React.FC<SignalTimelineProps> = ({ symbol, limit = 
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
+      <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar">
         {signals.length === 0 ? (
-          <div className="text-center py-10 text-gray-600 italic">No signals detected recently</div>
+          <div className="text-center py-10 text-gray-600 italic text-xs">No signals detected recently</div>
         ) : (
           signals.map((signal, idx) => (
-            <div key={idx} className="relative pl-6 border-l border-gray-800 pb-2">
+            <div key={idx} className="relative pl-4 border-l border-gray-800 pb-1 group">
               {/* Dot */}
-              <div className={`absolute -left-[5px] top-1 w-2.5 h-2.5 rounded-full border-2 ${
-                signal.side === 'bullish' ? 'border-green-500 bg-green-900' : 
-                signal.side === 'bearish' ? 'border-red-500 bg-red-900' : 'border-gray-500 bg-gray-900'
+              <div className={`absolute -left-[4px] top-1.5 w-1.5 h-1.5 rounded-full ${
+                signal.side === 'bullish' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 
+                signal.side === 'bearish' ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]' : 'bg-gray-500'
               }`} />
               
-              <div className="text-[10px] text-gray-500 font-mono mb-1">
-                {format(new Date(signal.time), 'HH:mm:ss')} • {signal.symbol}
-              </div>
-              
-              <div className={`text-xs p-2 rounded border ${getSeverityColor(signal.severity)}`}>
-                <div className="font-bold flex items-center gap-2 mb-1">
-                  <span>{getSignalIcon(signal.signal_type, signal.side)}</span>
-                  {signal.signal_type.replace(/_/g, ' ').toUpperCase()}
+              <div className={`text-[11px] p-2 rounded border transition-all hover:bg-opacity-20 ${getSeverityColor(signal.severity)}`}>
+                <div className="flex justify-between items-center mb-1">
+                  <div className="font-bold flex items-center gap-1.5">
+                    <span>{getSignalIcon(signal.signal_type, signal.side)}</span>
+                    <span className="tracking-tighter">{(signal.signal_type || 'SIGNAL').replace(/_/g, ' ').toUpperCase()}</span>
+                  </div>
+                  <div className="text-[9px] font-mono opacity-60">
+                    {format(new Date(signal.time), 'HH:mm:ss')}
+                  </div>
                 </div>
-                <div className="text-gray-300 leading-relaxed">
+                
+                <div className="text-gray-300 text-[10px] leading-tight mb-1">
+                  <span className="text-blue-300 font-bold mr-1">#{signal.symbol}</span>
                   {signal.message}
                 </div>
+                
                 {signal.price_at_signal && (
-                  <div className="mt-1 font-mono text-[10px] opacity-70">
-                    Price at Signal: ${Number(signal.price_at_signal).toLocaleString()}
+                  <div className="font-mono text-[9px] opacity-50 flex justify-end italic">
+                    @{Number(signal.price_at_signal).toLocaleString()}
                   </div>
                 )}
               </div>

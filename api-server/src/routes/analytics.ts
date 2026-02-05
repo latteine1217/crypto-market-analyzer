@@ -59,25 +59,59 @@ router.get('/order-size', async (req: Request, res: Response) => {
 router.get('/cvd', async (req: Request, res: Response) => {
   const { exchange = 'bybit', symbol = 'BTCUSDT', interval = '1m', limit = '1000' } = req.query;
 
-  // 映射 interval 到 time_bucket 支援的格式 (若需要聚合大於 1m 的週期)
-  // 目前 market_cvd_1m 是 1分鐘粒度。若請求 1h，我們需再聚合。
-  // 為求簡化與效能，Phase 2.1 先直接回傳 1m 粒度，讓前端處理或之後做更複雜聚合。
+  const intervalMap: Record<string, string> = {
+    '1m': '1 minute',
+    '5m': '5 minutes',
+    '15m': '15 minutes',
+    '1h': '1 hour',
+    '4h': '4 hours',
+    '1d': '1 day',
+  };
+  const bucketInterval = intervalMap[String(interval)] || intervalMap['1m'];
   
   try {
     const result = await query(`
-      WITH raw_delta AS (
+      WITH vars AS (
         SELECT
-          bucket,
-          volume_delta,
-          buy_volume,
-          sell_volume
-        FROM market_cvd_1m cvd
-        JOIN markets m ON cvd.market_id = m.id
+          $1::text AS exchange,
+          $2::text AS symbol,
+          $3::interval AS bucket_interval,
+          $4::int AS limit_points
+      ),
+      target_market AS (
+        SELECT m.id
+        FROM markets m
         JOIN exchanges e ON m.exchange_id = e.id
-        WHERE e.name = $1 
-          AND m.symbol = $2
-          AND bucket >= NOW() - ($3 || ' minutes')::INTERVAL -- 動態計算時間範圍
-        ORDER BY bucket ASC
+        WHERE e.name = (SELECT exchange FROM vars)
+          AND m.symbol = (SELECT symbol FROM vars)
+        LIMIT 1
+      ),
+      time_grid AS (
+        SELECT generate_series(
+          time_bucket((SELECT bucket_interval FROM vars), NOW() - ((SELECT limit_points FROM vars) * (SELECT bucket_interval FROM vars))),
+          time_bucket((SELECT bucket_interval FROM vars), NOW()),
+          (SELECT bucket_interval FROM vars)
+        ) AS bucket
+      ),
+      aggregated_cvd AS (
+        SELECT
+          time_bucket((SELECT bucket_interval FROM vars), cvd.bucket) AS bucket,
+          SUM(cvd.volume_delta) AS volume_delta,
+          SUM(cvd.buy_volume) AS buy_volume,
+          SUM(cvd.sell_volume) AS sell_volume
+        FROM market_cvd_1m cvd
+        WHERE cvd.market_id = (SELECT id FROM target_market)
+          AND cvd.bucket >= time_bucket((SELECT bucket_interval FROM vars), NOW() - ((SELECT limit_points FROM vars) * (SELECT bucket_interval FROM vars)))
+        GROUP BY 1
+      ),
+      filled_delta AS (
+        SELECT
+          tg.bucket,
+          COALESCE(cvd.volume_delta, 0) as volume_delta,
+          COALESCE(cvd.buy_volume, 0) as buy_volume,
+          COALESCE(cvd.sell_volume, 0) as sell_volume
+        FROM time_grid tg
+        LEFT JOIN aggregated_cvd cvd ON tg.bucket = cvd.bucket
       ),
       cumulative_calc AS (
         SELECT
@@ -86,21 +120,20 @@ router.get('/cvd', async (req: Request, res: Response) => {
           SUM(volume_delta) OVER (ORDER BY bucket ASC) as cvd,
           buy_volume,
           sell_volume
-        FROM raw_delta
+        FROM filled_delta
       )
       SELECT * FROM cumulative_calc
-      ORDER BY time DESC -- 回傳時通常最新在前，或者前端要求
+      ORDER BY time DESC
       LIMIT $4;
     `, [
       exchange, 
       symbol, 
-      parseInt(String(limit)) * 1, // 粗略估算時間範圍 (1000 points * 1 min)
-      limit
+      bucketInterval,
+      parseInt(String(limit))
     ]);
 
-    // 注意：Window Function 是在篩選後的結果集上計算的。
-    // 這意味著 CVD 會從查詢範圍的第一筆開始歸零累積。
-    // 這符合 Session CVD 的定義。若要全歷史 CVD，需先計算一個初始 Offset (較慢)。
+    // 注意：Window Function 是在查詢範圍內計算的。
+    // CVD 會從區間起點歸零累積，符合 Session CVD 定義。
     
     res.json({ data: result.rows });
   } catch (err) {

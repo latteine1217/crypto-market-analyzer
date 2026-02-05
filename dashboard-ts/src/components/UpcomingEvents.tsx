@@ -6,7 +6,7 @@ import type { Event } from '@/types/market';
 import { useState } from 'react';
 
 export function UpcomingEvents() {
-  const [selectedSources, setSelectedSources] = useState<string[]>(['fred_calendar', 'coinmarketcal']);
+  const [selectedSources] = useState<string[]>(['coinmarketcal']);
   const [days, setDays] = useState(7);
 
   const { data, isLoading } = useQuery({
@@ -14,16 +14,6 @@ export function UpcomingEvents() {
     queryFn: () => fetchUpcomingEvents(days),
     refetchInterval: 300000, // 每 5 分鐘刷新
   });
-
-  const toggleSource = (source: string) => {
-    if (selectedSources.includes(source)) {
-      if (selectedSources.length > 1) {
-        setSelectedSources(selectedSources.filter(s => s !== source));
-      }
-    } else {
-      setSelectedSources([...selectedSources, source]);
-    }
-  };
 
   const filteredEvents = data?.eventsByDate 
     ? Object.fromEntries(
@@ -101,29 +91,13 @@ export function UpcomingEvents() {
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-2xl font-bold text-indigo-400">Upcoming Events</h2>
         
-        {/* Calendar Filter */}
+        {/* Calendar Source */}
         <div className="flex items-center gap-2 text-sm">
           <span className="text-indigo-400 font-semibold">{activeCount} Event{activeCount !== 1 ? 's' : ''}</span>
-          <button
-            onClick={() => setSelectedSources(prev => 
-              prev.length === 2 ? [] : ['fred_calendar', 'coinmarketcal']
-            )}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-900/30 border border-indigo-700/50 hover:bg-indigo-900/50 transition-colors"
-          >
-            <div className="flex gap-1">
-              <div 
-                className={`w-3 h-3 rounded-full transition-opacity ${
-                  selectedSources.includes('fred_calendar') ? 'bg-blue-500' : 'bg-gray-600'
-                }`}
-              />
-              <div 
-                className={`w-3 h-3 rounded-full transition-opacity ${
-                  selectedSources.includes('coinmarketcal') ? 'bg-orange-500' : 'bg-gray-600'
-                }`}
-              />
-            </div>
-            <span className="text-xs text-gray-400 font-medium">2 Calendars</span>
-          </button>
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-900/30 border border-indigo-700/50">
+            <div className="w-3 h-3 rounded-full bg-orange-500" />
+            <span className="text-xs text-gray-400 font-medium">CoinMarketCal</span>
+          </div>
         </div>
       </div>
 
@@ -190,11 +164,6 @@ export function UpcomingEvents() {
                                   </span>
                                   {event.country && (
                                     <span className="text-gray-600">{event.country}</span>
-                                  )}
-                                  {event.source === 'fred_calendar' && (
-                                    <span className="px-2 py-0.5 rounded bg-blue-900/30 text-blue-400 text-[10px] font-medium">
-                                      Economic
-                                    </span>
                                   )}
                                   {event.source === 'coinmarketcal' && (
                                     <span className="px-2 py-0.5 rounded bg-orange-900/30 text-orange-400 text-[10px] font-medium">

@@ -10,6 +10,7 @@ import {
   MessageType,
   Trade,
   Kline,
+  OrderBookSnapshot,
   FlushConfig
 } from '../types';
 import { parseSymbol, normalizeSymbol } from '../utils/symbolUtils';
@@ -181,12 +182,82 @@ export class DBFlusher {
    * Flush 訂單簿快照
    */
   private async flushOrderBookSnapshots(): Promise<number> {
-    // V3 Schema 已移除 orderbook_snapshots 表以優化效能
-    await this.queue.pop(
+    const messages = await this.queue.pop(
       MessageType.ORDERBOOK_SNAPSHOT,
       this.flushConfig.batchSize
     );
-    return 0;
+
+    if (messages.length === 0) {
+      return 0;
+    }
+
+    log.debug(`Flushing ${messages.length} orderbook snapshots`);
+
+    const client = await this.pool.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      const rows: Array<[
+        number, number, string, string, number | null, number | null, number | null
+      ]> = [];
+
+      for (const msg of messages) {
+        const snap = msg.data as OrderBookSnapshot;
+        
+        const marketId = await this.getOrCreateMarketId(
+          client,
+          msg.exchange,
+          snap.symbol
+        );
+
+        const bestBid = snap.bids.length > 0 ? snap.bids[0].price : null;
+        const bestAsk = snap.asks.length > 0 ? snap.asks[0].price : null;
+        const spread = (bestBid && bestAsk) ? (bestAsk - bestBid) : null;
+        const midPrice = (bestBid && bestAsk) ? (bestAsk + bestBid) / 2 : null;
+
+        rows.push([
+          marketId,
+          snap.timestamp,
+          JSON.stringify(snap.bids.slice(0, 20)), // 限制存儲 Top 20 檔位
+          JSON.stringify(snap.asks.slice(0, 20)),
+          spread,
+          midPrice,
+          snap.obi || null
+        ]);
+      }
+
+      const values = rows
+        .map(
+          (_, i) =>
+            `($${i * 7 + 1}, to_timestamp($${i * 7 + 2} / 1000.0), $${i * 7 + 3}, $${i * 7 + 4}, $${i * 7 + 5}, $${i * 7 + 6}, $${i * 7 + 7})`
+        )
+        .join(', ');
+
+      await client.query(
+        `
+        INSERT INTO orderbook_snapshots (
+          market_id, time, bids, asks, spread, mid_price, obi
+        )
+        VALUES ${values}
+        ON CONFLICT (market_id, time) DO NOTHING
+        `,
+        rows.flat()
+      );
+
+      await client.query('COMMIT');
+
+      this.stats.totalFlushed += messages.length;
+      return messages.length;
+
+    } catch (error) {
+      await client.query('ROLLBACK');
+      log.error('Failed to flush orderbook snapshots', error);
+      await this.queue.pushBatch(messages);
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   /**
@@ -399,15 +470,31 @@ export class DBFlusher {
     // 標準化 symbol 為交易所原生格式 (無斜線)
     const normalizedSymbol = normalizeSymbol(symbol);
 
-    // 決定市場類型 (啟發式判斷)
+    // ✅ 優先從 symbol_registry 尋找匹配
+    const registryResult = await client.query(
+      'SELECT internal_symbol, market_type, base_asset, quote_asset FROM symbol_registry WHERE exchange_id = $1 AND native_symbol = $2',
+      [exchangeId, normalizedSymbol]
+    );
+
     let marketType = 'spot';
-    if (exchangeName === 'bybit') {
-      marketType = 'linear_perpetual';
+
+    if (registryResult.rows.length > 0) {
+      const reg = registryResult.rows[0];
+      marketType = reg.market_type;
+      base = reg.base_asset;
+      quote = reg.quote_asset;
+      // 我們在 markets 表仍存 native_symbol，但屬性由 registry 決定
+    } else {
+      // 降級邏輯 (Heuristic)
+      if (exchangeName === 'bybit') {
+        marketType = 'linear_perpetual';
+      }
+      log.warn(`Symbol ${normalizedSymbol} not found in registry for ${exchangeName}, using heuristics.`);
     }
 
     result = await client.query(
-      `INSERT INTO markets (exchange_id, symbol, base_asset, quote_asset, market_type)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO markets (exchange_id, symbol, base_asset, quote_asset, market_type, is_active)
+       VALUES ($1, $2, $3, $4, $5, FALSE)
        ON CONFLICT (exchange_id, symbol) DO UPDATE SET 
          base_asset = EXCLUDED.base_asset,
          quote_asset = EXCLUDED.quote_asset,

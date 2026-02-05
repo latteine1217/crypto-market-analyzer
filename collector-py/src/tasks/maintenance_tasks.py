@@ -6,17 +6,53 @@ from loguru import logger
 from error_handler import retry_with_backoff, RetryConfig
 from utils.symbol_utils import to_ccxt_format
 
+import datetime
+
 def run_quality_check_task(orchestrator):
     """品質檢查任務"""
-    results = orchestrator.quality_checker.check_all_active_markets(timeframe="1m", lookback_hours=1, create_backfill_tasks=True)
-    for result in results:
-        if 'exchange' in result and 'symbol' in result:
-            orchestrator.metrics.update_data_quality(
-                exchange=result['exchange'], symbol=result['symbol'], 
-                timeframe=result.get('timeframe', '1m'), score=result.get('score', 0), 
-                missing_rate=result.get('missing_rate', 0)
-            )
-    logger.info(f"Quality check completed: {len(results)} markets checked")
+    # ... existing code ...
+
+def run_cvd_calibration_task(orchestrator):
+    """CVD 校準任務：抓取 24h Volume 作為真值錨點，記錄漂移"""
+    logger.info("Starting CVD calibration...")
+    markets = orchestrator.db.get_active_markets()
+    client = orchestrator.connectors.get('bybit')
+    
+    if not client:
+        return
+
+    for m in markets:
+        market_id, symbol = m['id'], m['symbol']
+        try:
+            ccxt_symbol = to_ccxt_format(symbol, market_type='linear')
+            ticker = client.fetch_ticker(ccxt_symbol)
+            exchange_vol_24h = float(ticker.get('baseVolume', 0))
+            
+            if exchange_vol_24h <= 0: continue
+            
+            # 獲取本地 24h 累積成交量
+            query = "SELECT SUM(amount) FROM trades WHERE market_id = %s AND time >= NOW() - INTERVAL '24 hours'"
+            with orchestrator.db.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(query, (market_id,))
+                    local_vol_24h = float(cur.fetchone()[0] or 0)
+            
+            # 記錄錨點
+            with orchestrator.db.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO market_anchors (market_id, time, anchor_type, value, system_cvd) VALUES (%s, NOW(), %s, %s, %s)",
+                        (market_id, 'volume_24h', exchange_vol_24h, local_vol_24h)
+                    )
+            
+            drift = (1 - (local_vol_24h / exchange_vol_24h)) * 100 if exchange_vol_24h > 0 else 0
+            if abs(drift) > 5:
+                logger.warning(f"⚠️ CVD Drift detected for {symbol}: {drift:.2f}%")
+            else:
+                logger.info(f"✅ {symbol} CVD drift is within healthy range: {drift:.2f}%")
+                
+        except Exception as e:
+            logger.error(f"CVD calibration failed for {symbol}: {e}")
 
 def run_backfill_task(orchestrator):
     """補資料任務"""

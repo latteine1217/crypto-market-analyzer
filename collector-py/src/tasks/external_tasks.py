@@ -1,10 +1,9 @@
 """
 外部數據任務模組
-負責 CryptoPanic 新聞、BitInfoCharts 富豪榜、FRED 經濟數據、CoinMarketCal 事件數據、Fear & Greed Index
+負責 BitInfoCharts 富豪榜、CoinMarketCal 事件數據、Fear & Greed Index
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from loguru import logger
-from connectors.fred_calendar_collector import run_fred_calendar_collection
 from connectors.coinmarketcal_collector import run_coinmarketcal_collection
 
 def run_fear_greed_task(orchestrator):
@@ -18,17 +17,6 @@ def run_fear_greed_task(orchestrator):
     except Exception as e:
         logger.error(f"Fear & Greed collection failed: {e}")
 
-def run_fred_task(orchestrator):
-    """FRED 經濟指標收集任務（每週一次）"""
-    try:
-        count = orchestrator.fred_collector.run_collection(
-            orchestrator.db
-        )
-        if count > 0:
-            logger.success(f"Collected {count} FRED indicator records")
-    except Exception as e:
-        logger.error(f"FRED collection failed: {e}")
-
 def run_etf_flows_task(orchestrator):
     """ETF 資金流向收集任務（每日一次）"""
     try:
@@ -37,18 +25,49 @@ def run_etf_flows_task(orchestrator):
         )
         if count > 0:
             logger.success(f"Collected {count} ETF flows records")
+        # 記錄未知產品代碼（若有）
+        unknown = orchestrator.etf_flows_collector.get_last_unknown_codes()
+        for asset, codes in unknown.items():
+            for code in codes:
+                orchestrator.metrics.record_etf_unknown_product(asset=asset, product_code=code)
+
+        # 更新新鮮度指標
+        run_etf_freshness_task(orchestrator)
     except Exception as e:
         logger.error(f"ETF flows collection failed: {e}")
 
-def run_news_task(orchestrator):
-    """新聞收集任務"""
+def run_etf_freshness_task(orchestrator):
+    """ETF 資料新鮮度檢查（Prometheus 指標）"""
     try:
-        count = orchestrator.news_collector.run_collection(orchestrator.db)
-        if count > 0:
-            logger.success(f"Collected {count} news items from CryptoPanic")
-    except Exception as e:
-        logger.error(f"News collection failed: {e}")
+        with orchestrator.db.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT metadata->>'asset_type' AS asset_type, MAX(time) AS latest_time
+                    FROM global_indicators
+                    WHERE category = 'etf'
+                      AND metadata->>'asset_type' IS NOT NULL
+                    GROUP BY asset_type
+                """)
+                rows = cur.fetchall()
 
+        if not rows:
+            logger.warning("No ETF data found for freshness check")
+            return
+
+        now = datetime.now(timezone.utc)
+        for asset_type, latest_time in rows:
+            if not latest_time:
+                continue
+            age_seconds = (now - latest_time).total_seconds()
+            orchestrator.metrics.update_etf_latest_timestamp(asset=asset_type, timestamp=latest_time.timestamp())
+            orchestrator.metrics.update_etf_staleness_seconds(asset=asset_type, seconds=age_seconds)
+
+            if age_seconds > 36 * 3600:
+                logger.warning(
+                    f"ETF data stale for {asset_type}: last update {latest_time.isoformat()} ({age_seconds/3600:.1f}h ago)"
+                )
+    except Exception as e:
+        logger.error(f"ETF freshness check failed: {e}")
 def run_rich_list_task(orchestrator):
     """鏈上富豪榜收集任務"""
     try:
@@ -89,21 +108,13 @@ def run_whale_task(orchestrator):
     except Exception as e:
         logger.error(f"Whale collection failed: {e}")
 
-def run_events_task(orchestrator):    """經濟與加密事件收集任務（FRED Economic Data + CoinMarketCal）"""
+def run_events_task(orchestrator):
+    """經濟與加密事件收集任務（CoinMarketCal）"""
     try:
         with orchestrator.db.get_connection() as conn:
-            # 收集 FRED 經濟數據事件
-            fred_count = run_fred_calendar_collection(conn, months_ahead=3)
-            if fred_count > 0:
-                logger.success(f"Collected {fred_count} FRED economic events")
-            
             # 收集 CoinMarketCal 加密事件
             cmc_count = run_coinmarketcal_collection(conn)
             if cmc_count > 0:
                 logger.success(f"Collected {cmc_count} crypto events from CoinMarketCal")
-            
-            total_count = (fred_count or 0) + (cmc_count or 0)
-            if total_count > 0:
-                logger.info(f"Total events collected: {total_count}")
     except Exception as e:
         logger.error(f"Events collection failed: {e}")

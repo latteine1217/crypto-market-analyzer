@@ -4,32 +4,57 @@
 
 @layer base {
   body {
-    @apply bg-background text-foreground;
+    @apply bg-[#0b0e11] text-[#eaecef];
+    font-feature-settings: "tnum" on, "lnum" on;
   }
 }
 
 @layer components {
   .card {
-    @apply bg-gray-900 rounded-lg border border-gray-800 p-6;
+    @apply bg-[#161a1e] rounded-xl border border-gray-800/50 shadow-lg backdrop-blur-sm transition-all duration-300;
+  }
+  
+  .card:hover {
+    @apply border-gray-700/80 shadow-gray-900/50;
   }
   
   .card-header {
-    @apply text-lg font-semibold mb-4 pb-2 border-b border-gray-800;
-  }
-  
-  .btn-primary {
-    @apply bg-primary hover:bg-primary-dark text-white font-medium py-2 px-4 rounded transition-colors;
+    @apply text-base font-bold mb-4 flex items-center gap-2 text-gray-200;
   }
   
   .stat-card {
-    @apply card flex flex-col items-center justify-center;
+    @apply bg-[#1e2329] p-4 rounded-xl border border-gray-800 flex flex-col;
   }
   
   .stat-label {
-    @apply text-sm text-gray-400 mb-1;
+    @apply text-[11px] uppercase tracking-wider text-gray-500 font-bold mb-1;
   }
   
   .stat-value {
-    @apply text-2xl font-bold;
+    @apply text-xl font-mono font-bold tracking-tight;
+  }
+
+  .glow-green {
+    @apply shadow-[0_0_15px_rgba(0,192,115,0.15)] border-green-500/30;
+  }
+
+  .glow-red {
+    @apply shadow-[0_0_15px_rgba(246,70,93,0.15)] border-red-500/30;
+  }
+
+  /* Custom Scrollbar for trading feel */
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #2b3139;
+    border-radius: 10px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #474d57;
   }
 }

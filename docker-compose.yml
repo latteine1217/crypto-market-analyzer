@@ -92,6 +92,8 @@ services:
       context: ./collector-py
       dockerfile: Dockerfile
     container_name: crypto_collector
+    env_file:
+      - ./collector-py/.env
     environment:
       - POSTGRES_HOST=db
       - POSTGRES_PORT=5432
@@ -108,7 +110,6 @@ services:
       - BYBIT_API_SECRET=${BYBIT_API_SECRET:-}
       - ETHERSCAN_API_KEY=${ETHERSCAN_API_KEY:-}
       - CRYPTOPANIC_API_KEY=${CRYPTOPANIC_API_KEY:-}
-      - FRED_API_KEY=${FRED_API_KEY:-}
       - COINMARKETCAL_API_KEY=${COINMARKETCAL_API_KEY:-}
       - COLLECTOR_CONFIG_DIR=/app/configs/collector
     volumes:

@@ -140,8 +140,8 @@ class SimpleETFCollector:
         all_data = self.load_csv_files()
         
         if not all_data:
-            logger.warning("⚠️  No ETF data available. Using demo mode.")
-            return self._generate_demo_data(days)
+            logger.warning("⚠️  No ETF CSV data available. Returning empty result.")
+            return []
         
         # 篩選最近 N 天
         cutoff_date = date.today() - pd.Timedelta(days=days)
@@ -150,32 +150,6 @@ class SimpleETFCollector:
         logger.info(f"Filtered to {len(filtered_data)} records (last {days} days)")
         return filtered_data
     
-    def _generate_demo_data(self, days: int = 7) -> List[Dict]:
-        """生成示範資料（當沒有 CSV 時）"""
-        logger.info("Generating demo ETF data for testing...")
-        
-        products = [
-            {'code': 'IBIT', 'issuer': 'BlackRock', 'asset': 'BTC'},
-            {'code': 'FBTC', 'issuer': 'Fidelity', 'asset': 'BTC'},
-            {'code': 'GBTC', 'issuer': 'Grayscale', 'asset': 'BTC'},
-        ]
-        
-        results = []
-        for i in range(days):
-            flow_date = date.today() - pd.Timedelta(days=i)
-            
-            for product in products:
-                results.append({
-                    'date': flow_date,
-                    'product_code': product['code'],
-                    'product_name': product['code'],
-                    'issuer': product['issuer'],
-                    'asset_type': product['asset'],
-                    'net_flow_usd': float(pd.np.random.uniform(-50, 100) * 1_000_000),
-                    'total_aum_usd': None
-                })
-        
-        return results
     
     def run_collection(self, db_loader, days: int = 7) -> int:
         """執行收集任務"""

@@ -77,14 +77,14 @@ function TechnicalContent() {
 
   const { data: ohlcv, isLoading } = useQuery({
     queryKey: ['ohlcv', exchange, symbol, timeframe],
-    queryFn: () => fetchOHLCV(exchange, symbol, { limit: 500, timeframe }),
-    refetchInterval: 15000,
+    queryFn: () => fetchOHLCV(exchange, symbol, { limit: 2000, timeframe }),
+    refetchInterval: 2000, // 提升至 2秒，讓 K 線收盤更及時
   })
 
   const { data: cvdData } = useQuery({
     queryKey: ['cvd', exchange, symbol, timeframe],
     queryFn: () => fetchCVD(exchange, symbol, timeframe, 500),
-    refetchInterval: 10000,
+    refetchInterval: 5000, // 提升至 5秒
   })
 
   const { data: liquidations } = useQuery({
@@ -96,98 +96,25 @@ function TechnicalContent() {
   const { data: orderbook } = useQuery({
     queryKey: ['orderbook', exchange, symbol],
     queryFn: () => fetchLatestOrderbook(exchange, symbol),
-    refetchInterval: 5000,
+    refetchInterval: 1000, // ⚡️ 1秒極速刷新 (配合 Redis 實時數據)
     enabled: visibleIndicators.depth,
   })
-
-  // 圖表引用管理
-  const chartsRef = useRef<Map<string, IChartApi>>(new Map())
-  const syncHandlersRef = useRef<Map<string, (range: any) => void>>(new Map())
-
-  const onChartCreate = useCallback((id: string, chart: IChartApi) => {
-    console.log(`[Chart Debug] Registering chart: ${id}`);
-    chartsRef.current.set(id, chart)
-  }, [])
-
-  // 同步邏輯 - 使用防抖機制避免循環觸發
-  const isSyncSetupRef = useRef(false)
-  const isSyncingRef = useRef(false) // 防止循環同步的標記
-  
-  useEffect(() => {
-    const charts = chartsRef.current
-    
-    // 如果已經設定過同步且圖表數量沒變化，則不重新綁定
-    if (isSyncSetupRef.current && charts.size > 0) return
-    
-    // 清理舊的監聽器
-    charts.forEach((chart, id) => {
-      const oldHandler = syncHandlersRef.current.get(id)
-      if (oldHandler) {
-        chart.timeScale().unsubscribeVisibleTimeRangeChange(oldHandler)
-      }
-    })
-    syncHandlersRef.current.clear()
-
-    // 監聽任何一個圖表的時間範圍變化，並同步到其他圖表
-    const createSyncHandler = (sourceId: string) => (range: any) => {
-      if (!range || isSyncingRef.current) return
-      
-      // 設置同步標記，防止循環觸發
-      isSyncingRef.current = true
-      
-      const currentCharts = chartsRef.current
-      currentCharts.forEach((chart, id) => {
-        if (id !== sourceId) {
-          try {
-            // 💡 核心修正：僅同步時間範圍，且明確告知不要同步座標軸
-            chart.timeScale().setVisibleRange(range)
-          } catch (e) {
-            // 忽略範圍設定錯誤
-          }
-        }
-      })
-      
-      // 使用 setTimeout 確保所有同步操作完成後再重置標記
-      setTimeout(() => {
-        isSyncingRef.current = false
-      }, 0)
-    }
-
-    // 為所有圖表註冊監聽器
-    charts.forEach((chart, id) => {
-      const handler = createSyncHandler(id)
-      syncHandlersRef.current.set(id, handler)
-      chart.timeScale().subscribeVisibleTimeRangeChange(handler)
-    })
-    
-    isSyncSetupRef.current = true
-
-    return () => {
-      const currentCharts = chartsRef.current
-      currentCharts.forEach((chart, id) => {
-        const handler = syncHandlersRef.current.get(id)
-        if (handler) {
-          chart.timeScale().unsubscribeVisibleTimeRangeChange(handler)
-        }
-      })
-    }
-  }, []) // ✅ 空依賴陣列 - 僅在組件掛載時執行一次
 
   const { data: fundingRate } = useQuery({
     queryKey: ['funding-rate', exchange, symbol],
     queryFn: () => fetchFundingRate(exchange, symbol, 100),
-    refetchInterval: 30000,
-    enabled: ['bybit', 'binance', 'okx'].includes(exchange.toLowerCase()),
+    refetchInterval: 10000,
+    enabled: ['bybit', 'binance', 'okx'].includes((exchange || '').toLowerCase()),
   })
 
   const { data: openInterest } = useQuery({
     queryKey: ['open-interest', exchange, symbol],
     queryFn: () => fetchOpenInterest(exchange, symbol, 500),
-    refetchInterval: 30000,
-    enabled: ['bybit', 'binance', 'okx'].includes(exchange.toLowerCase()),
+    refetchInterval: 10000,
+    enabled: ['bybit', 'binance', 'okx'].includes((exchange || '').toLowerCase()),
   })
 
-  // 合併與計算指標
+  // ✅ 合併與計算指標 (必須在 useEffect 之前定義)
   const dataWithIndicators = useMemo(() => {
     if (!ohlcv || ohlcv.length === 0) return null
     
@@ -233,6 +160,75 @@ function TechnicalContent() {
     })
   }, [ohlcv, openInterest, fundingRate])
 
+  // 圖表引用管理
+  const chartsRef = useRef<Map<string, IChartApi>>(new Map())
+  const syncHandlersRef = useRef<Map<string, (range: any) => void>>(new Map())
+  const isSyncingRef = useRef(false)
+
+  const onChartCreate = useCallback((id: string, chart: IChartApi) => {
+    console.log(`[Chart Sync] Registering chart: ${id}`);
+    chartsRef.current.set(id, chart)
+    
+    // 如果已有同步範圍，新圖表建立時立即對齊
+    if (chartsRef.current.size > 1) {
+      const firstChart = Array.from(chartsRef.current.values())[0]
+      const range = firstChart.timeScale().getVisibleRange()
+      if (range) {
+        try { chart.timeScale().setVisibleRange(range) } catch(e) {}
+      }
+    }
+  }, [])
+
+  // 同步邏輯 - 強化版 (解決不同步問題)
+  useEffect(() => {
+    const charts = chartsRef.current
+    if (charts.size === 0) return
+
+    // 1. 先徹底清理所有舊的監聽器
+    charts.forEach((chart, id) => {
+      const oldHandler = syncHandlersRef.current.get(id)
+      if (oldHandler) {
+        try { chart.timeScale().unsubscribeVisibleTimeRangeChange(oldHandler) } catch (e) {}
+      }
+    })
+    syncHandlersRef.current.clear()
+
+    // 2. 定義統一的同步處理器
+    const handleSync = (sourceId: string, range: any) => {
+      if (!range || isSyncingRef.current) return
+      isSyncingRef.current = true
+      
+      charts.forEach((chart, id) => {
+        if (id !== sourceId) {
+          try {
+            chart.timeScale().setVisibleRange(range)
+          } catch (e) {
+            // 如果圖表已銷毀但還在 Map 裡，這裡會出錯，我們忽略它
+          }
+        }
+      })
+      
+      // 使用小延遲防止循環觸發
+      setTimeout(() => { isSyncingRef.current = false }, 50)
+    }
+
+    // 3. 為當前所有存在的圖表重新綁定
+    charts.forEach((chart, id) => {
+      const handler = (range: any) => handleSync(id, range)
+      syncHandlersRef.current.set(id, handler)
+      chart.timeScale().subscribeVisibleTimeRangeChange(handler)
+    })
+
+    return () => {
+      charts.forEach((chart, id) => {
+        const handler = syncHandlersRef.current.get(id)
+        if (handler) {
+          try { chart.timeScale().unsubscribeVisibleTimeRangeChange(handler) } catch (e) {}
+        }
+      })
+    }
+  }, [visibleIndicators, dataWithIndicators, openInterest, fundingRate]) // 關鍵：數據變化時重新綁定同步
+
   const filteredMarkets = markets?.filter(m => m.exchange === exchange)
 
   const toggleIndicator = (key: keyof typeof visibleIndicators) => {
@@ -240,216 +236,154 @@ function TechnicalContent() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold mb-2">Technical Analysis</h1>
-          <p className="text-gray-400">Candlestick charts with technical indicators & derivatives data</p>
+    <div className="max-w-[1800px] mx-auto space-y-4 animate-in fade-in duration-500">
+      {/* Header & Controls */}
+      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 bg-[#1e2329]/80 backdrop-blur-md p-3 rounded-xl border border-gray-800 shadow-2xl">
+        <div className="flex items-center gap-3">
+          <div className="bg-blue-600/20 p-2 rounded-lg border border-blue-500/30">
+            <span className="text-lg">📈</span>
+          </div>
+          <div>
+            <h1 className="text-lg font-black tracking-tight flex items-center gap-2 text-gray-100">
+              TACTICAL TERMINAL
+              <span className="text-[9px] bg-green-500/10 text-green-500 border border-green-500/20 px-1.5 py-0.5 rounded font-bold animate-pulse">LIVE</span>
+            </h1>
+            <div className="flex items-center gap-2 text-[10px] font-mono">
+              <span className="text-blue-400 font-bold opacity-80">{exchange.toUpperCase()}</span>
+              <span className="text-gray-700">:</span>
+              <span className="text-white font-black">{symbol}</span>
+            </div>
+          </div>
         </div>
 
-        <div className="flex flex-wrap gap-4">
-          <select
-            value={exchange}
-            onChange={(e) => setExchange(e.target.value)}
-            className="bg-gray-800 border border-gray-700 rounded px-4 py-2"
-          >
-            <option value="bybit">Bybit</option>
-          </select>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Symbol & Exchange Selectors */}
+          <div className="flex bg-black/60 p-1 rounded-lg border border-gray-700/50 items-center">
+            <select
+              value={exchange}
+              onChange={(e) => setExchange(e.target.value)}
+              className="bg-transparent text-[10px] font-black text-gray-400 outline-none px-2 py-1 cursor-pointer hover:text-white transition-colors"
+            >
+              <option value="bybit">BYBIT</option>
+            </select>
+            <div className="w-[1px] h-3 bg-gray-800 mx-1"></div>
+            <select
+              value={symbol}
+              onChange={(e) => setSymbol(e.target.value)}
+              className="bg-transparent text-[11px] font-black text-blue-400 outline-none px-2 py-1 min-w-[100px] cursor-pointer hover:brightness-125 transition-all"
+            >
+              {filteredMarkets?.map(m => (
+                <option key={m.id} value={m.symbol}>{m.symbol}</option>
+              ))}
+            </select>
+          </div>
 
-          <select
-            value={symbol}
-            onChange={(e) => setSymbol(e.target.value)}
-            className="bg-gray-800 border border-gray-700 rounded px-4 py-2 min-w-[150px]"
-          >
-            {filteredMarkets?.map(m => (
-              <option key={m.id} value={m.symbol}>
-                {m.symbol}
-              </option>
-            ))}
-          </select>
-
-          <div className="flex bg-gray-800 rounded p-1 border border-gray-700">
+          {/* Timeframe Selector */}
+          <div className="flex bg-black/60 p-1 rounded-lg border border-gray-700/50">
             {['1m', '5m', '15m', '1h', '4h', '1d'].map((tf) => (
               <button
                 key={tf}
                 onClick={() => setTimeframe(tf)}
-                className={`px-3 py-1 text-sm rounded transition-colors ${
+                className={`px-3 py-1 text-[10px] font-black rounded transition-all ${
                   timeframe === tf
-                    ? 'bg-primary text-white font-medium'
-                    : 'text-gray-400 hover:text-white hover:bg-gray-700'
+                    ? 'bg-blue-600 text-white shadow-[0_0_10px_rgba(37,99,235,0.4)]'
+                    : 'text-gray-600 hover:text-gray-400'
                 }`}
               >
-                {tf}
+                {tf.toUpperCase()}
               </button>
             ))}
           </div>
         </div>
       </div>
 
-      {isLoading && (
-        <div className="space-y-6 animate-pulse">
-          <div className="h-64 bg-gray-800/50 rounded-xl border border-gray-700 flex items-center justify-center">
-            <div className="flex flex-col items-center">
-              <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-              <p className="text-gray-400">Fetching market data...</p>
-            </div>
+      <div className="grid grid-cols-1 xl:grid-cols-4 gap-4">
+        {/* Main Chart Area */}
+        <div className="xl:col-span-3 space-y-4">
+          {/* Indicators Toggle Bar */}
+          <div className="flex flex-wrap gap-2 items-center bg-[#161a1e] p-2 rounded-lg border border-gray-800/50">
+            <span className="text-[10px] font-bold text-gray-500 uppercase px-2 tracking-widest">Visibility:</span>
+            {[
+              { key: 'ma20', label: 'MA20', color: 'text-blue-400' },
+              { key: 'ma60', label: 'MA60', color: 'text-amber-500' },
+              { key: 'ma200', label: 'MA200', color: 'text-purple-500' },
+              { key: 'bb', label: 'BB', color: 'text-cyan-400' },
+              { key: 'macd', label: 'MACD', color: 'text-gray-400' },
+              { key: 'oi', label: 'OI', color: 'text-purple-400' },
+              { key: 'depth', label: 'DEPTH', color: 'text-teal-400' }
+            ].map((ind) => (
+              <button
+                key={ind.key}
+                onClick={() => toggleIndicator(ind.key as any)}
+                className={`px-3 py-1 rounded text-[10px] font-black border transition-all ${
+                  visibleIndicators[ind.key as keyof typeof visibleIndicators]
+                    ? `bg-gray-800 ${ind.color} border-gray-700 shadow-inner`
+                    : 'bg-transparent text-gray-600 border-transparent grayscale'
+                }`}
+              >
+                {ind.label}
+              </button>
+            ))}
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="h-48 bg-gray-800/50 rounded-xl border border-gray-700"></div>
-            <div className="h-48 bg-gray-800/50 rounded-xl border border-gray-700"></div>
+
+          <div className="card h-[600px] overflow-hidden">
+            {dataWithIndicators && (
+              <MemoizedLightweightCandlestickChart 
+                data={dataWithIndicators} 
+                cvdData={cvdData?.map(d => ({ time: d.time, cvd: d.cvd }))}
+                liquidations={liquidations}
+                visibleIndicators={visibleIndicators}
+                onChartCreate={(chart) => onChartCreate('main', chart)}
+                key={`${exchange}-${symbol}-${timeframe}`}
+              />
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {visibleIndicators.macd && dataWithIndicators && (
+              <div className="card h-[300px]">
+                <h2 className="text-[10px] font-bold text-gray-500 mb-2 tracking-widest uppercase">MACD Convergence/Divergence</h2>
+                <MemoizedMACDChart 
+                  data={dataWithIndicators} 
+                  onChartCreate={(chart) => onChartCreate('macd', chart)}
+                  key={`macd-${exchange}-${symbol}-${timeframe}`}
+                />
+              </div>
+            )}
+            {visibleIndicators.oi && openInterest && (
+              <div className="card h-[300px]">
+                <h2 className="text-[10px] font-bold text-gray-500 mb-2 tracking-widest uppercase">Open Interest (Derivatives)</h2>
+                <MemoizedOpenInterestChart 
+                  data={openInterest} 
+                  onChartCreate={(chart) => onChartCreate('oi', chart)}
+                  key={`oi-${exchange}-${symbol}`}
+                />
+              </div>
+            )}
           </div>
         </div>
-      )}
 
-      {dataWithIndicators && (
-        <>
-          {/* 指標控制面板 */}
-          <div className="flex flex-wrap gap-2 items-center bg-gray-900/50 p-2 rounded-lg border border-gray-800">
-            <span className="text-sm text-gray-400 mr-2 px-2">Indicators:</span>
-            
-            <label className="flex items-center space-x-2 px-3 py-1 bg-gray-800 rounded cursor-pointer hover:bg-gray-700 transition-colors">
-              <input 
-                type="checkbox" 
-                checked={visibleIndicators.ma20} 
-                onChange={() => toggleIndicator('ma20')}
-                className="rounded border-gray-600 text-blue-500 focus:ring-blue-500 bg-gray-700"
-              />
-              <span className="text-sm text-blue-400">MA 20</span>
-            </label>
-
-            <label className="flex items-center space-x-2 px-3 py-1 bg-gray-800 rounded cursor-pointer hover:bg-gray-700 transition-colors">
-              <input 
-                type="checkbox" 
-                checked={visibleIndicators.ma60} 
-                onChange={() => toggleIndicator('ma60')}
-                className="rounded border-gray-600 text-amber-500 focus:ring-amber-500 bg-gray-700"
-              />
-              <span className="text-sm text-amber-500">MA 60</span>
-            </label>
-
-            <label className="flex items-center space-x-2 px-3 py-1 bg-gray-800 rounded cursor-pointer hover:bg-gray-700 transition-colors">
-              <input 
-                type="checkbox" 
-                checked={visibleIndicators.ma200} 
-                onChange={() => toggleIndicator('ma200')}
-                className="rounded border-gray-600 text-purple-500 focus:ring-purple-500 bg-gray-700"
-              />
-              <span className="text-sm text-purple-500">MA 200</span>
-            </label>
-
-            <label className="flex items-center space-x-2 px-3 py-1 bg-gray-800 rounded cursor-pointer hover:bg-gray-700 transition-colors">
-              <input 
-                type="checkbox" 
-                checked={visibleIndicators.bb} 
-                onChange={() => toggleIndicator('bb')}
-                className="rounded border-gray-600 text-cyan-500 focus:ring-cyan-500 bg-gray-700"
-              />
-              <span className="text-sm text-cyan-400">Bollinger Bands</span>
-            </label>
-            
-            <label className="flex items-center space-x-2 px-3 py-1 bg-gray-800 rounded cursor-pointer hover:bg-gray-700 transition-colors">
-              <input 
-                type="checkbox" 
-                checked={visibleIndicators.macd} 
-                onChange={() => toggleIndicator('macd')}
-                className="rounded border-gray-600 text-gray-400 focus:ring-gray-500 bg-gray-700"
-              />
-              <span className="text-sm text-gray-300">MACD</span>
-            </label>
-
-            <label className="flex items-center space-x-2 px-3 py-1 bg-gray-800 rounded cursor-pointer hover:bg-gray-700 transition-colors">
-              <input 
-                type="checkbox" 
-                checked={visibleIndicators.oi} 
-                onChange={() => toggleIndicator('oi')}
-                className="rounded border-gray-600 text-purple-500 focus:ring-purple-500 bg-gray-700"
-              />
-              <span className="text-sm text-purple-400">Open Interest</span>
-            </label>
-            <label className="flex items-center space-x-2 px-3 py-1 bg-gray-800 rounded cursor-pointer hover:bg-gray-700 transition-colors">
-              <input 
-                type="checkbox" 
-                checked={visibleIndicators.depth} 
-                onChange={() => toggleIndicator('depth')}
-                className="rounded border-gray-600 text-teal-500 focus:ring-teal-500 bg-gray-700"
-              />
-              <span className="text-sm text-teal-400">Depth</span>
-            </label>
+        {/* Sidebar Intel */}
+        <div className="space-y-4 flex flex-col h-full">
+          <div className="card flex-none">
+            <h2 className="text-[10px] font-bold text-gray-500 mb-4 tracking-widest uppercase">Quick Statistics</h2>
+            {dataWithIndicators && <MemoizedIndicatorStats data={dataWithIndicators} />}
           </div>
 
-          {/* K 線圖與移動平均 */}
-          <div className="card">
-            <h2 className="card-header">Candlestick Chart</h2>
-            <MemoizedLightweightCandlestickChart 
-              data={dataWithIndicators} 
-              cvdData={cvdData?.map(d => ({ time: d.time, cvd: d.cvd }))}
-              liquidations={liquidations}
-              visibleIndicators={visibleIndicators}
-              onChartCreate={(chart) => onChartCreate('main', chart)}
-              key={`${exchange}-${symbol}-${timeframe}`}
-            />
+          <div className="h-[400px]">
+            <SignalTimeline symbol={symbol} limit={20} />
           </div>
 
-          {/* MACD 指標 (可選顯示) */}
-          {visibleIndicators.macd && (
-            <div className="card">
-              <h2 className="card-header">MACD Indicator</h2>
-              <MemoizedMACDChart 
-                data={dataWithIndicators} 
-                onChartCreate={(chart) => onChartCreate('macd', chart)}
-                key={`macd-${exchange}-${symbol}-${timeframe}`}
-              />
-            </div>
-          )}
-
-          {/* 資金費率 */}
-          {fundingRate && fundingRate.length > 0 && (
-            <div className="card">
-              <h2 className="card-header">Funding Rate (Perpetual)</h2>
-              <MemoizedFundingRateChart 
-                data={fundingRate} 
-                onChartCreate={(chart) => onChartCreate('funding', chart)}
-                key={`funding-${exchange}-${symbol}`}
-              />
-            </div>
-          )}
-
-          {/* 持倉量 (同步版) */}
-          {visibleIndicators.oi && openInterest && openInterest.length > 0 && (
-            <div className="card">
-              <h2 className="card-header">Open Interest</h2>
-              <MemoizedOpenInterestChart 
-                data={openInterest} 
-                onChartCreate={(chart) => onChartCreate('oi', chart)}
-                key={`oi-${exchange}-${symbol}`}
-              />
-            </div>
-          )}
-
-          {/* 深度圖 */}
-          {visibleIndicators.depth && orderbook && (
-            <div className="card">
-              <h2 className="card-header">Order Book Depth</h2>
-              <MemoizedDepthChart orderbook={orderbook} />
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-            <div className="lg:col-span-1 space-y-6">
-              <AlertsManager 
+          <div className="card flex-none">
+             <AlertsManager 
                 currentSymbol={symbol} 
-                currentPrice={dataWithIndicators[dataWithIndicators.length - 1]?.close} 
+                currentPrice={dataWithIndicators && dataWithIndicators.length > 0 
+                  ? dataWithIndicators[dataWithIndicators.length - 1].close 
+                  : 0} 
               />
-              <SignalTimeline symbol={symbol} />
-            </div>
-
-            <div className="lg:col-span-3 card">
-              <h2 className="card-header">Technical Indicators</h2>
-              <MemoizedIndicatorStats data={dataWithIndicators} />
-            </div>
           </div>
-        </>
-      )}
+        </div>
+      </div>
     </div>
   )
 }

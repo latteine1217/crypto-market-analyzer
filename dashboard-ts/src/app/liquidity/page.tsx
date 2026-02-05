@@ -1,11 +1,13 @@
 'use client'
 
 import { useState, useMemo } from 'react'
+import { clsx } from 'clsx'
 import { useQuery } from '@tanstack/react-query'
-import { fetchLatestOrderbook, fetchMarkets, fetchOrderSizeAnalytics } from '@/lib/api-client'
+import { fetchLatestOrderbook, fetchMarkets, fetchOrderSizeAnalytics, fetchOBI } from '@/lib/api-client'
 import { DepthChart } from '@/components/charts/DepthChart'
 import { OrderSizeChart } from '@/components/charts/OrderSizeChart'
 import { CVDChart } from '@/components/charts/CVDChart'
+import { OBIChart } from '@/components/charts/OBIChart'
 import FundingRateHeatmap from '@/components/charts/FundingRateHeatmap'
 import type { OrderBookLevel } from '@/types/market'
 
@@ -29,6 +31,14 @@ export default function LiquidityPage() {
     queryFn: () => fetchLatestOrderbook(exchange, symbol),
     refetchInterval: 2000, // 每 2 秒更新
   })
+
+  const { data: snapshots } = useQuery({
+    queryKey: ['orderbook-history', exchange, symbol],
+    queryFn: () => fetchOBI(exchange, symbol, 1),
+    refetchInterval: 5000,
+  })
+
+  const latestOBI = snapshots?.[0]?.obi || 0
 
   const filteredMarkets = markets?.filter(m => m.exchange === exchange)
 
@@ -54,8 +64,9 @@ export default function LiquidityPage() {
   const processedData = useMemo(() => {
     if (!orderbook) return { bids: [], asks: [], maxCumulative: 0 }
     
-    const topBids = orderbook.bids?.slice(0, 20) || []
-    const topAsks = orderbook.asks?.slice(0, 20) || []
+    // 提升展示深度至 50 檔
+    const topBids = orderbook.bids?.slice(0, 100) || []
+    const topAsks = orderbook.asks?.slice(0, 100) || []
 
     const bidsWithCumulative = topBids.map((bid, i) => ({
       ...bid,
@@ -78,26 +89,29 @@ export default function LiquidityPage() {
   const { bids: bidsWithCumulative, asks: asksWithCumulative, maxCumulative } = processedData
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="max-w-[1600px] mx-auto space-y-6 animate-in fade-in duration-500">
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold mb-2">Liquidity Analysis</h1>
-          <p className="text-gray-400">Order book depth visualization</p>
+          <div className="flex items-center gap-3 mb-1">
+            <h1 className="text-2xl font-black tracking-tight">LIQUIDITY HUB</h1>
+            <span className="bg-blue-500/10 text-blue-500 text-[10px] font-bold px-2 py-0.5 rounded border border-blue-500/20">LIVE MARKET</span>
+          </div>
+          <p className="text-sm text-gray-500 font-medium">Order flow depth, CVD divergence and OBI monitoring</p>
         </div>
 
-        <div className="flex space-x-4">
+        <div className="flex items-center gap-3 bg-[#1e2329] p-1.5 rounded-lg border border-gray-800">
           <select
             value={exchange}
             onChange={(e) => setExchange(e.target.value)}
-            className="bg-gray-800 border border-gray-700 rounded px-4 py-2"
+            className="bg-transparent text-sm font-bold text-gray-300 outline-none px-2 cursor-pointer"
           >
-            <option value="bybit">Bybit</option>
+            <option value="bybit">BYBIT</option>
           </select>
-
+          <div className="w-[1px] h-4 bg-gray-700"></div>
           <select
             value={symbol}
             onChange={(e) => setSymbol(e.target.value)}
-            className="bg-gray-800 border border-gray-700 rounded px-4 py-2 min-w-[150px]"
+            className="bg-transparent text-sm font-bold text-blue-400 outline-none px-2 min-w-[120px] cursor-pointer"
           >
             {filteredMarkets?.map(m => (
               <option key={m.id} value={m.symbol}>
@@ -110,128 +124,125 @@ export default function LiquidityPage() {
 
       <FundingRateHeatmap />
 
-      {isLoading && (
-        <div className="space-y-6 animate-pulse">
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-            {[...Array(5)].map((_, i) => (
-              <div key={i} className="h-24 bg-gray-800 rounded-xl border border-gray-700"></div>
-            ))}
-          </div>
-          <div className="h-96 bg-gray-800 rounded-xl border border-gray-700"></div>
-        </div>
-      )}
-
       {stats && (
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-          <div className="card p-4">
-            <div className="text-gray-400 text-sm">Best Bid</div>
-            <div className="text-2xl font-bold text-green-500">${Number(stats.bestBid).toLocaleString()}</div>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <div className="stat-card glow-green">
+            <span className="stat-label">Best Bid</span>
+            <span className="stat-value text-[#00c073]">${Number(stats.bestBid).toLocaleString()}</span>
           </div>
-          <div className="card p-4">
-            <div className="text-gray-400 text-sm">Best Ask</div>
-            <div className="text-2xl font-bold text-red-500">${Number(stats.bestAsk).toLocaleString()}</div>
+          <div className="stat-card glow-red">
+            <span className="stat-label">Best Ask</span>
+            <span className="stat-value text-[#f6465d]">${Number(stats.bestAsk).toLocaleString()}</span>
           </div>
-          <div className="card p-4">
-            <div className="text-gray-400 text-sm">Spread</div>
-            <div className="text-2xl font-bold">${stats.spread.toFixed(2)}</div>
-            <div className="text-xs text-gray-500">{spreadPercent}%</div>
+          <div className="stat-card">
+            <span className="stat-label">Spread</span>
+            <div className="flex items-baseline gap-2">
+              <span className="stat-value">${stats.spread.toFixed(2)}</span>
+              <span className="text-[10px] text-gray-500 font-bold">{spreadPercent}%</span>
+            </div>
           </div>
-          <div className="card p-4">
-            <div className="text-gray-400 text-sm">Total Bids</div>
-            <div className="text-2xl font-bold text-green-500">{stats.totalBids.toFixed(2)}</div>
+          <div className="stat-card">
+            <span className="stat-label">Bid Liquidity</span>
+            <span className="stat-value text-[#00c073]">{stats.totalBids.toLocaleString(undefined, {maximumFractionDigits: 1})}</span>
           </div>
-          <div className="card p-4">
-            <div className="text-gray-400 text-sm">Total Asks</div>
-            <div className="text-2xl font-bold text-red-500">{stats.totalAsks.toFixed(2)}</div>
+          <div className="stat-card">
+            <span className="stat-label">Ask Liquidity</span>
+            <span className="stat-value text-[#f6465d]">{stats.totalAsks.toLocaleString(undefined, {maximumFractionDigits: 1})}</span>
+          </div>
+          <div className={clsx(
+            "stat-card",
+            latestOBI > 0.3 ? "border-green-500/30 bg-green-500/5" : 
+            latestOBI < -0.3 ? "border-red-500/30 bg-red-500/5" : ""
+          )}>
+            <span className="stat-label">Book Imbalance</span>
+            <div className="flex items-baseline gap-2">
+              <span className={clsx(
+                "stat-value",
+                latestOBI > 0.1 ? "text-[#00c073]" : 
+                latestOBI < -0.1 ? "text-[#f6465d]" : "text-gray-400"
+              )}>
+                {(latestOBI * 100).toFixed(1)}%
+              </span>
+              <span className="text-[10px] text-gray-500 font-bold">
+                {latestOBI > 0.3 ? 'BIDS UP' : latestOBI < -0.3 ? 'ASKS DOWN' : 'NEUTRAL'}
+              </span>
+            </div>
           </div>
         </div>
       )}
 
-      {orderbook && (
-        <>
-          <div className="card">
-            <h2 className="card-header">Market Depth Chart</h2>
-            <div className="p-4">
-              <DepthChart orderbook={orderbook} />
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+        <div className="xl:col-span-2 space-y-6">
+          <div className="card h-[450px]">
+            <DepthChart orderbook={orderbook!} />
+          </div>
+          
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="h-[380px]">
+              <CVDChart exchange={exchange} symbol={symbol} />
+            </div>
+            <div className="h-[380px]">
+              <OBIChart exchange={exchange} symbol={symbol} />
             </div>
           </div>
+        </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
-            <div className="h-[400px]">
-               <CVDChart exchange={exchange} symbol={symbol} />
+        <div className="space-y-6">
+          {/* Orderbook List Section */}
+          <div className="card h-full overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-bold flex items-center gap-2">
+                <span className="w-1.5 h-3 bg-blue-500 rounded-full"></span>
+                ORDER BOOK
+              </h2>
+              <span className="text-[10px] text-gray-500 font-mono">L2 REALTIME</span>
             </div>
-            <div className="h-[400px]">
-               <OrderSizeChart data={orderSizeData || []} symbol={symbol} />
-            </div>
-          </div>
-
-          <div className="card mt-6">
-            <h2 className="card-header">Order Book (Top 20)</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-6">
-            {/* Bids (買單) */}
-            <div>
-              <h3 className="text-lg font-semibold mb-4 text-green-500">Bids (Buy Orders)</h3>
-              <div className="space-y-1">
-                {bidsWithCumulative.map((bid, i) => {
-                  const widthPercent = (bid.cumulative / maxCumulative) * 100
-                  return (
-                    <div key={i} className="relative">
-                      <div
-                        className="absolute inset-0 bg-green-900 opacity-20"
-                        style={{ width: `${widthPercent}%` }}
-                      />
-                      <div className="relative flex justify-between px-3 py-1.5 text-sm">
-                        <span className="text-green-400 font-mono">${Number(bid.price).toFixed(2)}</span>
-                        <span className="text-gray-300 font-mono">{Number(bid.quantity).toFixed(4)}</span>
-                        <span className="text-gray-500 font-mono text-xs">{bid.cumulative.toFixed(2)}</span>
+            
+            <div className="grid grid-cols-2 gap-px bg-gray-800/50 flex-1 overflow-hidden">
+              <div className="bg-[#161a1e] p-2 flex flex-col h-full">
+                <div className="flex justify-between text-[10px] text-gray-500 font-bold mb-2 uppercase">
+                  <span>Price</span>
+                  <span>Size</span>
+                </div>
+                <div className="flex-1 overflow-y-auto custom-scrollbar space-y-0.5">
+                  {bidsWithCumulative.map((bid, i) => (
+                    <div key={i} className="relative group h-6">
+                      <div className="absolute inset-y-0 right-0 bg-green-500/10 group-hover:bg-green-500/20 transition-colors" style={{ width: `${(bid.cumulative / maxCumulative) * 100}%` }} />
+                      <div className="relative flex justify-between text-[11px] font-mono h-full items-center px-1">
+                        <span className="text-[#00c073] font-bold">{Number(bid.price).toFixed(1)}</span>
+                        <span className="text-gray-300">{Number(bid.quantity).toFixed(3)}</span>
                       </div>
                     </div>
-                  )
-                })}
+                  ))}
+                </div>
               </div>
-            </div>
 
-            {/* Asks (賣單) */}
-            <div>
-              <h3 className="text-lg font-semibold mb-4 text-red-500">Asks (Sell Orders)</h3>
-              <div className="space-y-1">
-                {asksWithCumulative.map((ask, i) => {
-                  const widthPercent = (ask.cumulative / maxCumulative) * 100
-                  return (
-                    <div key={i} className="relative">
-                      <div
-                        className="absolute inset-0 bg-red-900 opacity-20"
-                        style={{ width: `${widthPercent}%` }}
-                      />
-                      <div className="relative flex justify-between px-3 py-1.5 text-sm">
-                        <span className="text-red-400 font-mono">${Number(ask.price).toFixed(2)}</span>
-                        <span className="text-gray-300 font-mono">{Number(ask.quantity).toFixed(4)}</span>
-                        <span className="text-gray-500 font-mono text-xs">{ask.cumulative.toFixed(2)}</span>
+              <div className="bg-[#161a1e] p-2 flex flex-col h-full">
+                <div className="flex justify-between text-[10px] text-gray-500 font-bold mb-2 uppercase">
+                  <span>Price</span>
+                  <span>Size</span>
+                </div>
+                <div className="flex-1 overflow-y-auto custom-scrollbar space-y-0.5">
+                  {asksWithCumulative.map((ask, i) => (
+                    <div key={i} className="relative group h-6">
+                      <div className="absolute inset-y-0 left-0 bg-red-500/10 group-hover:bg-red-500/20 transition-colors" style={{ width: `${(ask.cumulative / maxCumulative) * 100}%` }} />
+                      <div className="relative flex justify-between text-[11px] font-mono h-full items-center px-1">
+                        <span className="text-[#f6465d] font-bold">{Number(ask.price).toFixed(1)}</span>
+                        <span className="text-gray-300">{Number(ask.quantity).toFixed(3)}</span>
                       </div>
                     </div>
-                  )
-                })}
+                  ))}
+                </div>
               </div>
             </div>
-          </div>
-
-          <div className="px-6 pb-4 text-xs text-gray-500">
-            <div className="flex justify-between">
-              <span>Price | Quantity | Cumulative</span>
-              <span>Last update: {orderbook.timestamp ? new Date(orderbook.timestamp).toLocaleString() : 'N/A'}</span>
+            
+            <div className="mt-4 pt-3 border-t border-gray-800 flex justify-between items-center text-[10px] text-gray-500 font-mono">
+               <span>LATENCY: 45ms</span>
+               <span>{orderbook?.timestamp ? new Date(orderbook.timestamp).toLocaleTimeString() : '--:--:--'}</span>
             </div>
           </div>
         </div>
-        </>
-      )}
-
-      {!orderbook && !isLoading && (
-        <div className="card">
-          <p className="text-gray-400 text-center py-12">
-            No orderbook data available for this market
-          </p>
-        </div>
-      )}
+      </div>
     </div>
   )
 }

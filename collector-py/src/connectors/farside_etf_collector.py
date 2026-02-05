@@ -9,12 +9,18 @@ Farside Investors ETF Data Scraper (Professional Cloudflare Bypass Version)
 """
 
 from typing import List, Dict, Optional
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, time as dtime, timezone
 from loguru import logger
 from curl_cffi.requests import Session
 from bs4 import BeautifulSoup
-import time
+import time as time_module
 import os
+import json
+
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
 
 # Selenium imports (Fallback)
 from selenium import webdriver
@@ -31,6 +37,24 @@ class FarsideInvestorsETFCollector:
     Farside Investors ETF 資料爬蟲 - 專業級 Cloudflare 穿透版
     """
     
+    BTC_PRODUCTS = {
+        'IBIT': ('BlackRock', 'iShares Bitcoin Trust'),
+        'FBTC': ('Fidelity', 'Fidelity Wise Origin Bitcoin Fund'),
+        'GBTC': ('Grayscale', 'Grayscale Bitcoin Trust'),
+        'BITB': ('Bitwise', 'Bitwise Bitcoin ETF'),
+        'ARKB': ('ARK Invest', 'ARK 21Shares Bitcoin ETF'),
+        'BTCO': ('Invesco', 'Invesco Galaxy Bitcoin ETF'),
+        'HODL': ('VanEck', 'VanEck Bitcoin Trust'),
+        'BRRR': ('Valkyrie', 'Valkyrie Bitcoin Fund'),
+        'EZBC': ('Franklin Templeton', 'Franklin Bitcoin ETF'),
+    }
+    ETH_PRODUCTS = {
+        'ETHE': ('Grayscale', 'Grayscale Ethereum Trust'),
+        'FETH': ('Fidelity', 'Fidelity Ethereum Fund'),
+        'ETHA': ('BlackRock', 'iShares Ethereum Trust'),
+        'ETHW': ('Bitwise', 'Bitwise Ethereum ETF'),
+    }
+
     BASE_URL_BTC = "https://farside.co.uk/btc/"
     BASE_URL_ETH = "https://farside.co.uk/eth/"
     
@@ -40,12 +64,55 @@ class FarsideInvestorsETFCollector:
         """
         self.use_selenium = use_selenium
         self.driver = None
+        self.market_tz = ZoneInfo("America/New_York") if ZoneInfo else timezone.utc
+        self.last_unknown_codes: Dict[str, set] = {}
+        self.current_url: Optional[str] = None
         
         # 1. 永遠使用 Session 以保留驗證通過後的 Cookie (cf_clearance)
         # impersonate="chrome110" 會自動處理對應版本的 TLS 指紋與預設 Headers
         self.session = Session(impersonate="chrome110")
         
         logger.info("Farside ETF Collector initialized with curl_cffi Session (chrome110)")
+
+    def _market_close_timestamp(self, flow_date: date) -> datetime:
+        """將 ETF 日期對齊到美股收盤（16:00 ET）並轉為 UTC"""
+        if isinstance(flow_date, datetime):
+            flow_date = flow_date.date()
+        close_dt = datetime.combine(flow_date, dtime(16, 0), tzinfo=self.market_tz)
+        return close_dt.astimezone(timezone.utc)
+
+    def _known_products(self, asset_type: str) -> set:
+        return set(self.BTC_PRODUCTS.keys()) if asset_type == 'BTC' else set(self.ETH_PRODUCTS.keys())
+
+    def _record_schema_change(self, asset_type: str, reason: str, html: str, product_codes: List[str], url: str = None):
+        """當偵測到欄位變動或新品種時，保留 HTML 快照與欄位資訊"""
+        try:
+            if url is None:
+                url = self.current_url
+            snapshot_dir = os.path.join("logs", "etf_snapshots")
+            os.makedirs(snapshot_dir, exist_ok=True)
+            suffix = f"{asset_type.lower()}_{date.today().isoformat()}_{reason}"
+            html_path = os.path.join(snapshot_dir, f"{suffix}.html")
+            meta_path = os.path.join(snapshot_dir, f"{suffix}.json")
+            if os.path.exists(html_path) and os.path.exists(meta_path):
+                return
+
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(html or "")
+
+            metadata = {
+                "asset_type": asset_type,
+                "reason": reason,
+                "product_codes": product_codes,
+                "url": url,
+                "captured_at": datetime.now(timezone.utc).isoformat()
+            }
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(metadata, f, ensure_ascii=False, indent=2)
+
+            logger.warning(f"ETF schema change snapshot saved: {meta_path}")
+        except Exception as e:
+            logger.error(f"Failed to write ETF schema snapshot: {e}")
     
     def _fetch_with_curl_cffi(self, url: str, max_retries: int = 3) -> Optional[str]:
         """使用 curl_cffi Session 抓取頁面"""
@@ -65,7 +132,7 @@ class FarsideInvestorsETFCollector:
                         # 隨機等待一段時間模擬真人
                         wait_time = 5 * (attempt + 1)
                         logger.info(f"Waiting {wait_time}s before next attempt...")
-                        time.sleep(wait_time)
+                        time_module.sleep(wait_time)
                         continue
                     return None
                 
@@ -81,7 +148,7 @@ class FarsideInvestorsETFCollector:
             except Exception as e:
                 logger.error(f"curl_cffi session error on {url}: {e}")
                 if attempt < max_retries - 1:
-                    time.sleep(3)
+                    time_module.sleep(3)
                 else:
                     return None
         return None
@@ -121,7 +188,7 @@ class FarsideInvestorsETFCollector:
             driver.get(url)
             # 等待表格載入
             WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.TAG_NAME, "table")))
-            time.sleep(5) 
+            time_module.sleep(5) 
             return driver.page_source
         except Exception as e:
             logger.error(f"Selenium fallback failed for {url}: {e}")
@@ -144,11 +211,15 @@ class FarsideInvestorsETFCollector:
         try:
             soup = BeautifulSoup(html, 'html.parser')
             tables = soup.find_all('table')
-            if len(tables) < 2: return []
+            if len(tables) < 2:
+                self._record_schema_change(asset_type, "missing_table", html, [], url=None)
+                return []
             
             data_table = tables[1]
             rows = data_table.find_all('tr')
-            if len(rows) < 4: return []
+            if len(rows) < 4:
+                self._record_schema_change(asset_type, "missing_rows", html, [], url=None)
+                return []
             
             product_codes = []
             for row in rows[:2]:
@@ -158,7 +229,16 @@ class FarsideInvestorsETFCollector:
                     product_codes = codes
                     break
             
-            if not product_codes: return []
+            if not product_codes:
+                self._record_schema_change(asset_type, "missing_product_codes", html, [], url=None)
+                return []
+
+            known_codes = self._known_products(asset_type)
+            unknown_codes = [c for c in product_codes if c.upper() not in known_codes]
+            if unknown_codes:
+                self.last_unknown_codes.setdefault(asset_type, set()).update([c.upper() for c in unknown_codes])
+                logger.warning(f"Detected unknown ETF product codes ({asset_type}): {unknown_codes}")
+                self._record_schema_change(asset_type, "unknown_product_codes", html, product_codes, url=None)
             
             results = []
             start_idx = 2
@@ -175,6 +255,7 @@ class FarsideInvestorsETFCollector:
                 date_text = cells[0].get_text(strip=True)
                 flow_date = self._parse_date(date_text)
                 if not flow_date: continue
+                timestamp = self._market_close_timestamp(flow_date)
                 
                 for i, code in enumerate(product_codes):
                     if i + 1 >= len(cells): break
@@ -184,6 +265,7 @@ class FarsideInvestorsETFCollector:
                     issuer, _ = self._extract_product_info(code, asset_type)
                     results.append({
                         'date': flow_date,
+                        'timestamp': timestamp,
                         'product_code': code,
                         'product_name': code,
                         'issuer': issuer,
@@ -195,28 +277,11 @@ class FarsideInvestorsETFCollector:
             return results
         except Exception as e:
             logger.error(f"Table parsing error: {e}")
+            self._record_schema_change(asset_type, "parse_exception", html, [], url=None)
             return []
 
     def _extract_product_info(self, product_name: str, asset_type: str) -> tuple:
-        btc_products = {
-            'IBIT': ('BlackRock', 'iShares Bitcoin Trust'),
-            'FBTC': ('Fidelity', 'Fidelity Wise Origin Bitcoin Fund'),
-            'GBTC': ('Grayscale', 'Grayscale Bitcoin Trust'),
-            'BITB': ('Bitwise', 'Bitwise Bitcoin ETF'),
-            'ARKB': ('ARK Invest', 'ARK 21Shares Bitcoin ETF'),
-            'BTCO': ('Invesco', 'Invesco Galaxy Bitcoin ETF'),
-            'HODL': ('VanEck', 'VanEck Bitcoin Trust'),
-            'BRRR': ('Valkyrie', 'Valkyrie Bitcoin Fund'),
-            'EZBC': ('Franklin Templeton', 'Franklin Bitcoin ETF'),
-        }
-        eth_products = {
-            'ETHE': ('Grayscale', 'Grayscale Ethereum Trust'),
-            'FETH': ('Fidelity', 'Fidelity Ethereum Fund'),
-            'ETHA': ('BlackRock', 'iShares Ethereum Trust'),
-            'ETHW': ('Bitwise', 'Bitwise Ethereum ETF'),
-        }
-        
-        products = btc_products if asset_type == 'BTC' else eth_products
+        products = self.BTC_PRODUCTS if asset_type == 'BTC' else self.ETH_PRODUCTS
         for code, (issuer, _) in products.items():
             if code.upper() in product_name.upper():
                 return issuer, code
@@ -251,9 +316,11 @@ class FarsideInvestorsETFCollector:
 
     def run_collection(self, db_loader, days: int = 7) -> int:
         logger.info(f"🚀 Starting ETF flow collection (Last {days} days)...")
+        self.last_unknown_codes = {}
         
         results = []
         for url, asset in [(self.BASE_URL_BTC, 'BTC'), (self.BASE_URL_ETH, 'ETH')]:
+            self.current_url = url
             html = self._fetch_page_with_retry(url)
             if html:
                 results.extend(self._parse_etf_table(html, asset))
@@ -268,6 +335,10 @@ class FarsideInvestorsETFCollector:
         inserted = db_loader.insert_etf_flows_batch(filtered)
         logger.info(f"✅ ETF collection complete: {inserted} records inserted")
         return inserted
+
+    def get_last_unknown_codes(self) -> Dict[str, List[str]]:
+        """返回最近一次收集偵測到的未知產品代碼"""
+        return {k: sorted(list(v)) for k, v in self.last_unknown_codes.items()}
 
     def __del__(self):
         """確保釋放資源"""

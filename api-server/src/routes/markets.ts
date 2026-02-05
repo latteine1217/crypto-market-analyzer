@@ -27,7 +27,7 @@ router.get('/', cacheableQuery(
   { ttl: 60 }
 ));
 
-// GET /api/markets/prices - 取得最新價格
+// GET /api/markets/prices - 取得最新價格 (優化為前十大報表格式)
 router.get('/prices', cacheableQuery(
   () => 'markets:prices',
   async () => {
@@ -47,16 +47,6 @@ router.get('/prices', cacheableQuery(
           AND o.time >= NOW() - INTERVAL '25 hours'
         ORDER BY m.id, o.time DESC
       ),
-      first_prices_24h AS (
-        SELECT DISTINCT ON (m.id)
-          m.id as market_id,
-          o.open as first_price
-        FROM ohlcv o
-        JOIN markets m ON o.market_id = m.id
-        WHERE o.timeframe = '1m'
-          AND o.time >= NOW() - INTERVAL '24 hours'
-        ORDER BY m.id, o.time ASC
-      ),
       stats_24h AS (
         SELECT
           m.id as market_id,
@@ -68,6 +58,26 @@ router.get('/prices', cacheableQuery(
         WHERE o.timeframe = '1m'
           AND o.time >= NOW() - INTERVAL '24 hours'
         GROUP BY m.id
+      ),
+      first_prices_24h AS (
+        SELECT DISTINCT ON (m.id)
+          m.id as market_id,
+          o.open as first_price
+        FROM ohlcv o
+        JOIN markets m ON o.market_id = m.id
+        WHERE o.timeframe = '1m'
+          AND o.time >= NOW() - INTERVAL '24 hours'
+        ORDER BY m.id, o.time ASC
+      ),
+      latest_funding AS (
+        SELECT DISTINCT ON (market_id)
+          market_id,
+          value as funding_rate,
+          time as funding_time
+        FROM market_metrics
+        WHERE name = 'funding_rate'
+          AND time >= NOW() - INTERVAL '24 hours'
+        ORDER BY market_id, time DESC
       )
       SELECT
         lp.exchange,
@@ -81,11 +91,14 @@ router.get('/prices', cacheableQuery(
         END as change_24h,
         s24.high_24h,
         s24.low_24h,
-        s24.volume_24h
+        s24.volume_24h,
+        lf.funding_rate
       FROM latest_prices lp
       LEFT JOIN first_prices_24h fp ON lp.market_id = fp.market_id
       LEFT JOIN stats_24h s24 ON lp.market_id = s24.market_id
-      ORDER BY lp.exchange, lp.symbol
+      LEFT JOIN latest_funding lf ON lp.market_id = lf.market_id
+      ORDER BY s24.volume_24h DESC NULLS LAST
+      LIMIT 10
     `);
     return result.rows;
   },

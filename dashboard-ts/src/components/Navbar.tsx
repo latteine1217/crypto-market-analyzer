@@ -13,8 +13,8 @@ export function Navbar() {
     { href: '/', label: 'Home' },
     { href: '/technical', label: 'Technical' },
     { href: '/liquidity', label: 'Liquidity' },
+    { href: '/etf', label: 'ETF' },
     { href: '/onchain', label: 'On-Chain' },
-    { href: '/fred', label: 'FRED' },
     { href: '/status', label: 'Status' },
   ]
 

@@ -22,84 +22,40 @@ router.get('/:exchange/:symbol', asyncHandler(async (req: Request, res: Response
     return res.json({ data: cached, cached: true });
   }
 
-  // 1. 先嘗試直接查詢該 timeframe 的現成資料
-  const directResult = await query(
-    `
-    SELECT
-      time as timestamp,
-      open, high, low, close, volume
-    FROM ohlcv o
-    JOIN markets m ON o.market_id = m.id
-    JOIN exchanges e ON m.exchange_id = e.id
-    WHERE e.name = $1
-      AND m.symbol = $2
-      AND o.timeframe = $3
-    ORDER BY o.time DESC
-    LIMIT $4
-    `,
-    [exchange, symbol, timeframe, limit]
-  );
-
-  let ohlcv: any[] = [];
-  
-  // 決定聚合區間
-  let interval = '1 minute';
-  if (timeframe !== '1m') {
-    switch (timeframe) {
-      case '5m': interval = '5 minutes'; break;
-      case '15m': interval = '15 minutes'; break;
-      case '30m': interval = '30 minutes'; break;
-      case '1h': interval = '1 hour'; break;
-      case '4h': interval = '4 hours'; break;
-      case '12h': interval = '12 hours'; break;
-      case '1d': interval = '1 day'; break;
-      default: interval = '1 minute';
-    }
+  // [Optimized Strategy] 優先使用原生 Timeframe (1m, 1h, 4h, 1d)
+  // 只有當請求非原生 Timeframe (e.g. 15m) 時，才從 1m 數據動態聚合
+  // 同時修正 interval 字串，避免 '15m' 被當成 15 months
+  const intervalMap: Record<string, string> = {
+    '1m': '1 minute',
+    '5m': '5 minutes',
+    '15m': '15 minutes',
+    '1h': '1 hour',
+    '4h': '4 hours',
+    '1d': '1 day',
+  };
+  const intervalLiteral = intervalMap[timeframe];
+  if (!intervalLiteral) {
+    return res.status(400).json({ error: `Unsupported timeframe: ${timeframe}` });
   }
 
-  if (directResult.rows.length > 0) {
-    // 如果有直接儲存的該時框資料，直接使用
-    ohlcv = directResult.rows.reverse();
+  const nativeTimeframes = ['1m', '1h', '4h', '1d'];
+  const useNative = nativeTimeframes.includes(timeframe);
 
-    // [Hybrid Strategy] 如果是非 1m 資料，檢查是否需要從 1m 補齊最新數據（包含未完成 K 線）
-    if (timeframe !== '1m') {
-      const lastCandle = ohlcv[ohlcv.length - 1];
-      const lastTimestamp = new Date(lastCandle.timestamp).toISOString();
-
-      // 查詢比最後一根 K 線更新的 1m 數據並聚合
-      const pendingData = await query(
-        `
-        SELECT
-          time_bucket($3::interval, o.time) as timestamp,
-          FIRST(o.open, o.time) as open,
-          MAX(o.high) as high,
-          MIN(o.low) as low,
-          LAST(o.close, o.time) as close,
-          SUM(o.volume) as volume
-        FROM ohlcv o
-        JOIN markets m ON o.market_id = m.id
-        JOIN exchanges e ON m.exchange_id = e.id
-        WHERE e.name = $1
-          AND m.symbol = $2
-          AND o.timeframe = '1m'
-          AND o.time >= ($4::timestamptz + $3::interval)
-        GROUP BY timestamp
-        ORDER BY timestamp ASC
-        `,
-        [exchange, symbol, interval, lastTimestamp]
-      );
-
-      if (pendingData.rows.length > 0) {
-        ohlcv = ohlcv.concat(pendingData.rows);
-      }
-    }
-
-  } else if (timeframe !== '1m') {
-    // 2. 如果沒有直接資料且不是 1m，嘗試從 1m 進行動態聚合 (Full Aggregation)
-    const resampleResult = await query(
-      `
+  const querySqlNative = `
       SELECT
-        time_bucket($3::interval, o.time) as timestamp,
+        time as timestamp,
+        open, high, low, close, volume
+      FROM ohlcv o
+      JOIN markets m ON o.market_id = m.id
+      JOIN exchanges e ON m.exchange_id = e.id
+      WHERE e.name = $1 AND m.symbol = $2 AND o.timeframe = $4
+      ORDER BY o.time DESC
+      LIMIT $3
+    `;
+
+  const querySqlAgg = `
+      SELECT
+        time_bucket($4::interval, o.time) as timestamp,
         FIRST(o.open, o.time) as open,
         MAX(o.high) as high,
         MIN(o.low) as low,
@@ -108,18 +64,23 @@ router.get('/:exchange/:symbol', asyncHandler(async (req: Request, res: Response
       FROM ohlcv o
       JOIN markets m ON o.market_id = m.id
       JOIN exchanges e ON m.exchange_id = e.id
-      WHERE e.name = $1
-        AND m.symbol = $2
-        AND o.timeframe = '1m'
+      WHERE e.name = $1 AND m.symbol = $2 AND o.timeframe = '1m'
       GROUP BY timestamp
       ORDER BY timestamp DESC
-      LIMIT $4
-      `,
-      [exchange, symbol, interval, limit]
-    );
-    ohlcv = resampleResult.rows.reverse();
-  } else {
-    ohlcv = [];
+      LIMIT $3
+    `;
+
+  const nativeParams = [exchange, symbol, limit, timeframe];
+  const aggParams = [exchange, symbol, limit, intervalLiteral];
+
+  const result = await query(useNative ? querySqlNative : querySqlAgg, useNative ? nativeParams : aggParams);
+  let ohlcv = result.rows.reverse();
+
+  // 如果數據量太少且不是 1m，嘗試回溯更遠的 1m 數據
+  if (timeframe !== '1m' && ohlcv.length < Math.min(50, Math.floor(limit / 2))) {
+    // fallback: 使用 1m 重新聚合，避免原生 timeframe 缺漏
+    const fallback = await query(querySqlAgg, aggParams);
+    ohlcv = fallback.rows.reverse();
   }
 
   if (ohlcv.length === 0) {

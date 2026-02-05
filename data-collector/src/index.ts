@@ -25,6 +25,7 @@ class WebSocketCollector {
   private dbFlusher: DBFlusher;
   private metricsServer: MetricsServer;
   private snapshotTimer: NodeJS.Timeout | null = null;
+  private realtimeTimer: NodeJS.Timeout | null = null;
   private statsTimer: NodeJS.Timeout | null = null;
   private startTime: number;
   private exchange: string;
@@ -91,8 +92,11 @@ class WebSocketCollector {
       log.info('\nConnecting to WebSocket...');
       this.wsClient.connect();
 
-      // 啟動定期快照
+      // 啟動定期快照 (DB落盤)
       this.startPeriodicSnapshots();
+      
+      // 啟動實時更新 (Redis快取)
+      this.startRealtimeUpdates();
 
       // 啟動資料庫 flush
       log.info('Starting database flusher...');
@@ -235,18 +239,47 @@ class WebSocketCollector {
   }
 
   /**
-   * 啟動定期快照
+   * 啟動定期快照 (低頻 - 用於寫入資料庫)
    */
   private startPeriodicSnapshots(): void {
-    log.info('Starting periodic snapshots...');
+    log.info('Starting periodic DB snapshots (60s)...');
 
     this.snapshotTimer = this.orderBookManager.startPeriodicSnapshots(
       async (snapshot: OrderBookSnapshot) => {
-        // 記錄訂單簿快照
+        // 記錄訂單簿快照 (DB)
         this.metricsServer.orderbookSnapshotsTotal.inc({
           exchange: this.exchange,
           symbol: snapshot.symbol
         });
+
+        // 推送到 Redis 佇列 (供 DBFlusher 寫入 DB)
+        const message: QueueMessage = {
+          type: MessageType.ORDERBOOK_SNAPSHOT,
+          exchange: this.exchange,
+          data: snapshot,
+          receivedAt: Date.now()
+        };
+
+        await this.redisQueue.push(message);
+
+        // 記錄 Redis 推送
+        this.metricsServer.redisQueuePushTotal.inc({
+          queue_type: 'orderbook_snapshot'
+        });
+      }
+    );
+  }
+
+  /**
+   * 啟動實時更新 (高頻 - 用於 Redis 即時查詢)
+   */
+  private startRealtimeUpdates(): void {
+    log.info('Starting realtime Redis updates (1s)...');
+
+    this.realtimeTimer = setInterval(async () => {
+      for (const symbol of config.subscriptions.symbols) {
+        const snapshot = this.orderBookManager.getSnapshot(symbol);
+        if (!snapshot) continue;
 
         // 更新訂單簿價格 metrics
         if (snapshot.bids && snapshot.bids.length > 0) {
@@ -281,28 +314,14 @@ class WebSocketCollector {
           }, spreadBps);
         }
 
-        // 推送到 Redis 佇列
-        const message: QueueMessage = {
-          type: MessageType.ORDERBOOK_SNAPSHOT,
-          exchange: this.exchange,
-          data: snapshot,
-          receivedAt: Date.now()
-        };
-
-        await this.redisQueue.push(message);
-
-        // 記錄 Redis 推送
-        this.metricsServer.redisQueuePushTotal.inc({
-          queue_type: 'orderbook_snapshot'
-        });
-
-        // 同時儲存到 Redis Hash（供即時查詢）
+        // 儲存到 Redis Hash (供 API 即時查詢 OBI)
+        // 這裡不使用 push，而是直接更新狀態
         await this.redisQueue.saveOrderBookSnapshot(
           snapshot.symbol,
           snapshot
         );
       }
-    );
+    }, 1000); // 每 1 秒更新一次 Redis
   }
 
   /**
@@ -393,6 +412,11 @@ class WebSocketCollector {
     // 停止快照
     if (this.snapshotTimer) {
       clearInterval(this.snapshotTimer);
+    }
+
+    // 停止實時更新
+    if (this.realtimeTimer) {
+      clearInterval(this.realtimeTimer);
     }
 
     // 斷開 WebSocket

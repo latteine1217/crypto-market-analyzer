@@ -3,8 +3,7 @@
 初始化全球指標 (Global Indicators)
 職責：
 1. 抓取 Fear & Greed Index 完整歷史 (無需 API Key)
-2. 抓取 FRED 經濟數據歷史 (需 FRED_API_KEY)
-3. 抓取 ETF 資金流向歷史 (BTC & ETH, 無需 API Key)
+2. 抓取 ETF 資金流向歷史 (BTC & ETH, 無需 API Key)
 
 執行方式: docker exec crypto_collector python /app/scripts/init_global_indicators.py
 """
@@ -17,7 +16,6 @@ from typing import Optional
 sys.path.insert(0, '/app/src')
 
 from connectors.fear_greed_collector import FearGreedIndexCollector
-from connectors.fred_collector import FREDCollector
 from connectors.farside_etf_collector import FarsideInvestorsETFCollector
 from loaders.db_loader import DatabaseLoader
 from loguru import logger
@@ -73,25 +71,6 @@ def collect_fear_greed(db_loader):
         logger.error(f"❌ Fear & Greed collection failed: {e}")
         return 0
 
-def collect_fred(db_loader):
-    """收集 FRED 經濟數據 (2年)"""
-    logger.info("\n💵 Starting FRED Economic Data Collection (2 years)...")
-    
-    api_key = os.getenv('FRED_API_KEY')
-    if not api_key:
-        logger.warning("⚠️ FRED_API_KEY not set. Skipping FRED collection.")
-        return 0
-        
-    try:
-        collector = FREDCollector(api_key=api_key)
-        # 抓取 2 年歷史
-        count = collector.run_collection(db_loader, lookback_days=730)
-        logger.success(f"✅ FRED Data: Inserted {count} records")
-        return count
-    except Exception as e:
-        logger.error(f"❌ FRED collection failed: {e}")
-        return 0
-
 def collect_etf_flows(db_loader):
     """收集 ETF 資金流向 (365天)"""
     logger.info("\n🏦 Starting ETF Flows Collection (BTC & ETH, 365 days)...")
@@ -129,7 +108,6 @@ def main():
         
         results = {
             'fear_greed': 0,
-            'fred': 0,
             'etf': 0
         }
         
@@ -139,14 +117,10 @@ def main():
         # 3. ETF Flows (較慢，需爬蟲)
         results['etf'] = collect_etf_flows(db_loader)
         
-        # 4. FRED Data (需 API Key)
-        results['fred'] = collect_fred(db_loader)
-        
         logger.info("\n" + "=" * 60)
         logger.info("🎉 INITIALIZATION SUMMARY")
         logger.info(f"   - Fear & Greed: {results['fear_greed']} records")
         logger.info(f"   - ETF Flows:    {results['etf']} records")
-        logger.info(f"   - FRED Data:    {results['fred']} records")
         logger.info("=" * 60)
         
         db_loader.close()
