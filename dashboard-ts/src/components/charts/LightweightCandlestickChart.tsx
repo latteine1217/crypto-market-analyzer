@@ -278,13 +278,23 @@ export function LightweightCandlestickChart({
 
     // ✅ 更新 CVD 數據 (對齊基準線)
     if (cvdSeriesRef.current && cvdData && cvdData.length > 0) {
-      const firstCVD = Number(cvdData[0].cvd);
-      const alignedCVD: LineData[] = cvdData.map(d => ({
-        time: Math.floor(new Date(d.time).getTime() / 1000) as UTCTimestamp,
-        value: Number(d.cvd) - firstCVD
-      })).sort((a, b) => (a.time as number) - (b.time as number));
-      
-      cvdSeriesRef.current.setData(alignedCVD);
+      // 注意：API 可能回傳 DESC；先轉成 ASC 再做 baseline（用最早點歸零，右側顯示累積結果）
+      const sorted = [...cvdData]
+        .map(d => ({
+          t: Math.floor(new Date(d.time).getTime() / 1000),
+          v: Number(d.cvd)
+        }))
+        .filter(p => Number.isFinite(p.t) && Number.isFinite(p.v))
+        .sort((a, b) => a.t - b.t);
+
+      if (sorted.length > 0) {
+        const baseline = sorted[0].v;
+        const alignedCVD: LineData[] = sorted.map(p => ({
+          time: p.t as UTCTimestamp,
+          value: p.v - baseline
+        }));
+        cvdSeriesRef.current.setData(alignedCVD);
+      }
     }
 
     // ✅ 僅在首次載入時設定視圖範圍

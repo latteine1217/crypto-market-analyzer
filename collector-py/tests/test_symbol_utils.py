@@ -74,6 +74,12 @@ class TestParseSymbol:
             assert base == expected_base
             assert quote == expected_quote
 
+    def test_parse_ccxt_perpetual_format(self):
+        """測試 CCXT 永續格式 (BTC/USDT:USDT)"""
+        base, quote = parse_symbol('BTC/USDT:USDT')
+        assert base == 'BTC'
+        assert quote == 'USDT'
+
 
 class TestNormalizeSymbol:
     """測試 symbol 標準化功能"""
@@ -87,6 +93,11 @@ class TestNormalizeSymbol:
         """已經是原生格式"""
         assert normalize_symbol('BTCUSDT') == 'BTCUSDT'
         assert normalize_symbol('ETHBTC') == 'ETHBTC'
+
+    def test_normalize_ccxt_perpetual_format(self):
+        """CCXT 永續格式 → 原生格式"""
+        assert normalize_symbol('BTC/USDT:USDT') == 'BTCUSDT'
+        assert normalize_symbol('ETH/USDC:USDC') == 'ETHUSDC'
     
     def test_normalize_multiple_slashes(self):
         """多個斜線 (edge case)"""
@@ -98,19 +109,24 @@ class TestToCcxtFormat:
     
     def test_native_to_ccxt(self):
         """原生格式 → CCXT 格式"""
-        assert to_ccxt_format('BTCUSDT') == 'BTC/USDT'
-        assert to_ccxt_format('ETHBTC') == 'ETH/BTC'
+        assert to_ccxt_format('BTCUSDT', market_type='spot') == 'BTC/USDT'
+        assert to_ccxt_format('ETHBTC', market_type='spot') == 'ETH/BTC'
     
     def test_ccxt_to_ccxt(self):
         """已經是 CCXT 格式"""
-        assert to_ccxt_format('BTC/USDT') == 'BTC/USDT'
-        assert to_ccxt_format('ETH/BTC') == 'ETH/BTC'
+        assert to_ccxt_format('BTC/USDT', market_type='spot') == 'BTC/USDT'
+        assert to_ccxt_format('ETH/BTC', market_type='spot') == 'ETH/BTC'
     
     def test_various_quotes(self):
         """測試各種 quote asset"""
-        assert to_ccxt_format('ETHUSDC') == 'ETH/USDC'
-        assert to_ccxt_format('SOLUSDC') == 'SOL/USDC'
-        assert to_ccxt_format('LINKETH') == 'LINK/ETH'
+        assert to_ccxt_format('ETHUSDC', market_type='spot') == 'ETH/USDC'
+        assert to_ccxt_format('SOLUSDC', market_type='spot') == 'SOL/USDC'
+        assert to_ccxt_format('LINKETH', market_type='spot') == 'LINK/ETH'
+
+    def test_default_linear_to_perpetual(self):
+        """預設 linear 應輸出永續格式"""
+        assert to_ccxt_format('BTCUSDT') == 'BTC/USDT:USDT'
+        assert to_ccxt_format('ETH/BTC') == 'ETH/BTC:BTC'
 
 
 class TestIsValidSymbol:
@@ -174,12 +190,12 @@ class TestRoundTrip:
         """CCXT → Native → CCXT 應該一致"""
         original = 'BTC/USDT'
         native = normalize_symbol(original)
-        back = to_ccxt_format(native)
+        back = to_ccxt_format(native, market_type='spot')
         assert back == original
     
     def test_native_to_ccxt_to_native(self):
         """Native → CCXT → Native 應該一致"""
         original = 'BTCUSDT'
-        ccxt = to_ccxt_format(original)
+        ccxt = to_ccxt_format(original, market_type='spot')
         back = normalize_symbol(ccxt)
         assert back == original

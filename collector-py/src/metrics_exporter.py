@@ -110,6 +110,32 @@ class CollectorMetrics:
             'Collector running status (1=running, 0=stopped)'
         )
 
+        # ========== 排程任務健康度 ==========
+        self.scheduler_job_runs_total = Counter(
+            'collector_scheduler_job_runs_total',
+            'Total number of scheduler job runs',
+            ['job_id', 'status']  # success, failed
+        )
+
+        self.scheduler_job_duration_seconds = Histogram(
+            'collector_scheduler_job_duration_seconds',
+            'Scheduler job duration in seconds',
+            ['job_id'],
+            buckets=(0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0)
+        )
+
+        self.scheduler_job_last_success_timestamp = Gauge(
+            'collector_scheduler_job_last_success_timestamp',
+            'Unix timestamp of last successful scheduler job run',
+            ['job_id']
+        )
+
+        self.scheduler_job_last_failure_timestamp = Gauge(
+            'collector_scheduler_job_last_failure_timestamp',
+            'Unix timestamp of last failed scheduler job run',
+            ['job_id']
+        )
+
         # 連續失敗計數
         self.consecutive_failures = Gauge(
             'collector_consecutive_failures',
@@ -216,6 +242,21 @@ class CollectorMetrics:
             exchange=exchange,
             symbol=symbol
         ).inc(count)
+
+    def record_scheduler_job(
+        self,
+        job_id: str,
+        status: str,
+        duration_seconds: float,
+        timestamp: float
+    ):
+        """記錄排程任務執行情況"""
+        self.scheduler_job_runs_total.labels(job_id=job_id, status=status).inc()
+        self.scheduler_job_duration_seconds.labels(job_id=job_id).observe(duration_seconds)
+        if status == 'success':
+            self.scheduler_job_last_success_timestamp.labels(job_id=job_id).set(timestamp)
+        else:
+            self.scheduler_job_last_failure_timestamp.labels(job_id=job_id).set(timestamp)
 
     def record_orderbook_snapshot(
         self,

@@ -5,12 +5,13 @@ import { fetchRichList } from '@/lib/api-client'
 import { RichListTable } from '@/components/RichListTable'
 import { WhaleRadar } from '@/components/WhaleRadar'
 import { WhaleDistributionChart } from '@/components/charts/WhaleDistributionChart'
+import { QUERY_PROFILES } from '@/lib/queryProfiles'
 
 export default function OnChainPage() {
   const { data: richList, isLoading } = useQuery({
     queryKey: ['richList', 'BTC'],
     queryFn: () => fetchRichList('BTC', 30),
-    refetchInterval: 1000 * 60 * 60, // Refresh every hour
+    ...QUERY_PROFILES.hourly,
   })
 
   return (

@@ -15,6 +15,10 @@
 export function parseSymbol(symbol: string): [string, string] {
   // 移除可能的空白
   symbol = symbol.trim();
+  // 移除 CCXT 永續合約的 settle 後綴 (例如 :USDT)
+  if (symbol.includes(':')) {
+    symbol = symbol.split(':')[0];
+  }
 
   // 格式 1: BTC/USDT (CCXT 標準)
   if (symbol.includes('/')) {
@@ -48,7 +52,10 @@ export function parseSymbol(symbol: string): [string, string] {
  * @returns 標準化後的 symbol (無斜線)
  */
 export function normalizeSymbol(symbol: string): string {
-  return symbol.replace('/', '');
+  if (symbol.includes(':')) {
+    symbol = symbol.split(':')[0];
+  }
+  return symbol.replace(/\//g, '');
 }
 
 /**

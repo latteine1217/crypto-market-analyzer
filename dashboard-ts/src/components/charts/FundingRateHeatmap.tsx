@@ -11,7 +11,7 @@ const Plot = dynamic(() => import('react-plotly.js'), { ssr: false });
 interface HeatmapData {
   times: string[];
   symbols: string[];
-  matrix: (number | null)[][];
+  points: Array<{ t: number; s: number; v: number }>;
 }
 
 const FundingRateHeatmap: React.FC = () => {
@@ -37,6 +37,23 @@ const FundingRateHeatmap: React.FC = () => {
 
   // 格式化時間標籤
   const formattedTimes = data.times.map(t => format(new Date(t), 'MM-dd HH:mm'));
+  const xValues: string[] = [];
+  const yValues: string[] = [];
+  const zValues: number[] = [];
+  for (const point of data.points) {
+    const x = formattedTimes[point.t];
+    const y = data.symbols[point.s];
+    if (!x || !y) continue;
+    xValues.push(x);
+    yValues.push(y);
+    zValues.push(point.v);
+  }
+
+  // 動態縮放：用資料本身決定 cmin/cmax，避免熱力圖長期「一片灰」或「整片飽和」
+  const absMax = zValues.length > 0
+    ? zValues.reduce((m, v) => Math.max(m, Math.abs(Number(v) || 0)), 0)
+    : 0.0003;
+  const scale = Math.max(absMax, 0.0001); // 避免過小導致視覺噪點
 
   return (
     <div className="bg-gray-900 p-4 rounded-lg shadow-xl">
@@ -45,24 +62,29 @@ const FundingRateHeatmap: React.FC = () => {
         <Plot
           data={[
             {
-              z: data.matrix,
-              x: formattedTimes,
-              y: data.symbols,
-              type: 'heatmap',
-              colorscale: [
-                [0, '#00ff00'],     // 深綠 (Negative)
-                [0.45, '#1a1a1a'],  // 灰色 (Near Zero)
-                [0.55, '#1a1a1a'],  // 灰色
-                [1, '#ff0000']      // 深紅 (Positive)
-              ],
-              zmin: -0.0003, // -0.03%
-              zmax: 0.0003,  // 0.03% (通常 0.01% 是基準，0.03% 以上算過熱)
-              colorbar: {
-                title: { text: 'Rate' },
-                tickformat: '.2%',
-                thickness: 20
+              x: xValues,
+              y: yValues,
+              mode: 'markers',
+              type: 'scattergl',
+              marker: {
+                symbol: 'square',
+                size: 14,
+                color: zValues,
+                colorscale: [
+                  [0, '#00ff00'],     // 深綠 (Negative)
+                  [0.45, '#1a1a1a'],  // 灰色 (Near Zero)
+                  [0.55, '#1a1a1a'],  // 灰色
+                  [1, '#ff0000']      // 深紅 (Positive)
+                ],
+                cmin: -scale,
+                cmax: scale,
+                colorbar: {
+                  title: { text: 'Rate' },
+                  tickformat: '.2%',
+                  thickness: 20
+                }
               },
-              hovertemplate: '<b>%{y}</b><br>Time: %{x}<br>Rate: %{z:.4%}<extra></extra>'
+              hovertemplate: '<b>%{y}</b><br>Time: %{x}<br>Rate: %{marker.color:.4%}<extra></extra>'
             }
           ]}
           layout={{

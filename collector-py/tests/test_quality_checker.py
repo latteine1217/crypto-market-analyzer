@@ -130,7 +130,7 @@ class TestOHLCVQualityCheck:
             
             assert result['total_records'] == 1200
             # 應該建立補資料任務
-            mock_backfill_scheduler.schedule_backfill.assert_called()
+            mock_backfill_scheduler.create_backfill_task.assert_called()
     
     def test_check_quality_with_no_data(self, mock_db_loader, mock_validator, mock_backfill_scheduler):
         """測試完全無資料時的品質檢查"""
@@ -163,7 +163,7 @@ class TestOHLCVQualityCheck:
             
             assert result['total_records'] == 0
             # 應該建立補資料任務
-            mock_backfill_scheduler.schedule_backfill.assert_called()
+            mock_backfill_scheduler.create_backfill_task.assert_called()
 
 
 class TestExpectedCountCalculation:

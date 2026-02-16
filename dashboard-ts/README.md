@@ -1,148 +1,61 @@
-# Crypto Dashboard TypeScript
+# Crypto Dashboard (Next.js)
 
-全新的 TypeScript + Next.js 版本 Crypto Market Dashboard
+`dashboard-ts` 是交易監看前端，資料來源為 `api-server`。
 
-## 快速開始
+## 功能範圍（目前）
 
-### 前置需求
-- Node.js 18+
-- npm 或 yarn
-- 已運行的 PostgreSQL (TimescaleDB) 和 Redis
+- 市場總覽（Top 市值/成交量與衍生品摘要）
+- 技術分析頁（K 線、CVD、OI、Funding）
+- 流動性頁（Orderbook depth / OBI）
+- ETF 頁（Flow / divergence / issuer concentration）
+- 鏈上頁（whale / rich-list）
+- 狀態頁（系統健康與資料品質）
 
-### 安裝與啟動
-
-#### 1. API Server
+## 啟動
 
 ```bash
-cd api-server
-cp .env.example .env
-# 編輯 .env 配置資料庫連接
-
 npm install
-npm run dev  # 開發模式運行在 http://localhost:8080
+npm run dev
 ```
 
-#### 2. Dashboard Frontend
+預設埠：`3001`
+
+生產模式：
 
 ```bash
-cd dashboard-ts
-cp .env.example .env
-# 設置 NEXT_PUBLIC_API_URL=http://localhost:8080
-
-npm install
-npm run dev  # 開發模式運行在 http://localhost:3000
-```
-
-### 生產環境部署
-
-```bash
-# API Server
-cd api-server
 npm run build
 npm start
-
-# Dashboard
-cd dashboard-ts
-npm run build
-npm start
-```
-
-## 功能特性
-
-- ✅ **Market Overview**: 所有市場即時價格與 24h 變化
-- ✅ **Technical Analysis**: K 線圖 + 技術指標 (MACD, MA, RSI, Fractals)
-- ✅ **Liquidity Analysis**: 訂單簿深度視覺化
-- ✅ **Multi-Exchange Support**: Binance, Bybit, OKX
-- ✅ **Real-time Updates**: 5 秒自動刷新
-- ✅ **Redis Caching**: 高效能資料快取
-- ✅ **Responsive Design**: 適配各種螢幕尺寸
-
-## 技術棧
-
-**Frontend**:
-- Next.js 14 (App Router)
-- React 18
-- TypeScript
-- TanStack Query (React Query)
-- Recharts
-- Tailwind CSS
-
-**Backend**:
-- Express.js
-- TypeScript
-- PostgreSQL (pg)
-- Redis (ioredis)
-- Winston (logging)
-
-## API Endpoints
-
-### Markets
-- `GET /api/markets` - 取得所有市場列表
-- `GET /api/markets/prices` - 取得所有市場最新價格
-
-### OHLCV
-- `GET /api/ohlcv/:exchange/:symbol` - 取得 OHLCV 資料
-- `GET /api/ohlcv/:exchange/:symbol/summary` - 取得市場摘要
-
-### Orderbook
-- `GET /api/orderbook/:exchange/:symbol` - 取得訂單簿快照
-- `GET /api/orderbook/:exchange/:symbol/latest` - 取得最新訂單簿
-
-## 開發指南
-
-### 新增頁面
-
-```typescript
-// dashboard-ts/src/app/newpage/page.tsx
-'use client'
-
-export default function NewPage() {
-  return <div>New Page Content</div>
-}
-```
-
-### 新增 API Endpoint
-
-```typescript
-// api-server/src/routes/newroute.ts
-import { Router } from 'express';
-
-const router = Router();
-
-router.get('/', async (req, res) => {
-  res.json({ data: 'Hello' });
-});
-
-export { router as newRoutes };
 ```
 
 ## 環境變數
 
-### API Server (.env)
-```
-PORT=8080
-POSTGRES_HOST=localhost
-POSTGRES_PORT=5432
-POSTGRES_DB=crypto_db
-POSTGRES_USER=crypto
-POSTGRES_PASSWORD=crypto_pass
-REDIS_HOST=localhost
-REDIS_PORT=6379
+```env
+NEXT_PUBLIC_API_URL=/api
 ```
 
-### Dashboard (.env)
+若本地直連 API（非 nginx）可改成：
+
+```env
+NEXT_PUBLIC_API_URL=http://localhost:8080/api
 ```
-NEXT_PUBLIC_API_URL=http://localhost:8080
+
+## 型別契約注意事項
+
+- `DataQualityMetrics.status` 為小寫等級：
+  - `excellent | good | acceptable | poor | critical`
+- `DataQualityMetrics` 包含：
+  - `missing_count`
+  - `expected_count`
+  - `actual_count`
+  - `backfill_task_created`
+
+## 驗證
+
+```bash
+npm run type-check
+npm run build
 ```
 
-## 下一步計劃
+---
 
-- [ ] WebSocket 即時資料流整合
-- [ ] 更多技術指標 (Bollinger Bands, Ichimoku)
-- [ ] 自訂告警設定
-- [ ] 使用者偏好設定
-- [ ] 效能優化 (Server Components, ISR)
-
-## 授權
-
-MIT License
+最後更新：2026-02-13

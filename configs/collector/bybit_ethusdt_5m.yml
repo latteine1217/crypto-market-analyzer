@@ -1,0 +1,87 @@
+# ============================================
+# Bybit ETH/USDT 5分鐘 K線 Collector 配置
+# ============================================
+
+# 基本資訊
+name: bybit_ethusdt_5m
+description: "Bybit ETH/USDT 5分鐘 K線資料收集"
+
+# 交易所配置
+exchange:
+  name: bybit
+  api_endpoint: https://api.bybit.com
+  api_key: ${BYBIT_API_KEY}
+  api_secret: ${BYBIT_API_SECRET}
+
+# 交易對配置
+symbol:
+  base: ETH
+  quote: USDT
+  exchange_symbol: ETHUSDT
+
+# 資料類型配置
+data_type: ohlcv
+timeframe: 5m
+
+# 收集模式
+mode:
+  historical:
+    enabled: true
+    start_date: "2024-01-01T00:00:00Z"
+    end_date: null
+    batch_size: 1000
+
+  periodic:
+    enabled: true
+    schedule: "*/5 * * * *"
+    lookback_minutes: 120
+
+  realtime:
+    enabled: false
+
+# API 請求配置
+request:
+  timeout: 30
+  max_retries: 3
+  retry_delay: 5
+  backoff_factor: 2
+
+# 速率限制
+rate_limit:
+  requests_per_minute: 120
+  requests_per_second: 5
+  weight_per_request: 1
+  max_weight: 120
+
+# 資料驗證
+validation:
+  enabled: true
+  checks:
+    - timestamp_order
+    - no_duplicates
+    - price_range
+    - volume_positive
+
+# 儲存配置
+storage:
+  target: timescaledb
+  table: ohlcv
+  conflict_strategy: upsert
+  batch_insert: true
+  batch_size: 100
+
+# 錯誤處理
+error_handling:
+  on_api_error: retry
+  on_validation_error: skip_and_log
+  on_storage_error: retry
+  max_consecutive_failures: 10
+
+# 監控與日誌
+monitoring:
+  log_every_n_batches: 5
+  metrics:
+    - rows_inserted
+    - api_calls
+    - api_errors
+    - validation_failures

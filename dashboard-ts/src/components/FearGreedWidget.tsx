@@ -3,12 +3,13 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchFearGreed } from '@/lib/api-client';
+import { QUERY_PROFILES } from '@/lib/queryProfiles';
 
 export function FearGreedWidget() {
   const { data, isLoading, error } = useQuery({
     queryKey: ['fearGreed'],
     queryFn: fetchFearGreed,
-    refetchInterval: 300000, // 5 分鐘更新一次
+    ...QUERY_PROFILES.slow,
   });
 
   if (isLoading) {

@@ -56,7 +56,7 @@ export const OBIChart: React.FC<OBIChartProps> = ({ exchange, symbol }) => {
             Order Book Imbalance (OBI)
           </h3>
           <p className="text-xs text-gray-500 font-mono">
-            {symbol} • Top 5 Levels Imbalance
+            {symbol} • Top 20 Levels Notional Imbalance
           </p>
         </div>
       </div>

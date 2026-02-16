@@ -3,14 +3,67 @@
 負責品質檢查、補資料、資料保留政策與 DB 監控
 """
 from loguru import logger
-from error_handler import retry_with_backoff, RetryConfig
 from utils.symbol_utils import to_ccxt_format
-
-import datetime
 
 def run_quality_check_task(orchestrator):
     """品質檢查任務"""
-    # ... existing code ...
+    logger.info("=== Quality Check Task Start ===")
+    timeframe = "1m"
+    lookback_hours = 24
+
+    results = orchestrator.quality_checker.check_all_active_markets(
+        timeframe=timeframe,
+        lookback_hours=lookback_hours,
+        create_backfill_tasks=True
+    )
+
+    if not results:
+        logger.warning("No active markets found for quality check")
+        logger.info("=== Quality Check Task End ===")
+        return
+
+    total = len(results)
+    failed = 0
+    poor = 0
+
+    for result in results:
+        if result.get("error"):
+            failed += 1
+            logger.error(
+                f"Quality check failed for {result.get('symbol', 'unknown')}: {result['error']}"
+            )
+            continue
+
+        exchange = result.get("exchange", "unknown")
+        symbol = result.get("symbol", "unknown")
+        missing_rate = float(result.get("missing_rate", 0.0) or 0.0)
+        quality_score = float(result.get("quality_score", (1.0 - missing_rate) * 100.0))
+
+        if missing_rate > 0.03:
+            poor += 1
+
+        try:
+            orchestrator.metrics.update_data_quality(
+                exchange=exchange,
+                symbol=symbol,
+                timeframe=timeframe,
+                score=quality_score,
+                missing_rate=missing_rate
+            )
+        except Exception as metric_err:
+            logger.error(f"Failed to update quality metric for {symbol}: {metric_err}")
+
+    logger.info("=== Quality Check Summary ===")
+    logger.info(
+        f"markets={total}, failed={failed}, below_target={poor}, "
+        f"pass_rate={((total - failed - poor) / total) * 100:.2f}%"
+    )
+
+    # 全部市場都失敗視為任務失敗，讓 scheduler 指標可以反映異常
+    if failed == total:
+        raise RuntimeError("Quality check task failed for all markets")
+
+    logger.info("=== Quality Check Task End ===")
 
 def run_cvd_calibration_task(orchestrator):
     """CVD 校準任務：抓取 24h Volume 作為真值錨點，記錄漂移"""
@@ -44,6 +97,7 @@ def run_cvd_calibration_task(orchestrator):
                         "INSERT INTO market_anchors (market_id, time, anchor_type, value, system_cvd) VALUES (%s, NOW(), %s, %s, %s)",
                         (market_id, 'volume_24h', exchange_vol_24h, local_vol_24h)
                     )
+                    conn.commit()
             
             drift = (1 - (local_vol_24h / exchange_vol_24h)) * 100 if exchange_vol_24h > 0 else 0
             if abs(drift) > 5:

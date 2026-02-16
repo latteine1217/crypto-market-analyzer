@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import pool from '../database/pool';
 import { CacheService } from '../database/cache';
+import { sendError } from '../shared/utils/sendError';
 
 const cacheService = new CacheService();
 
@@ -23,20 +24,52 @@ const getWeekStart = (dateStr: string) => {
 
 const calculateRollingStats = (values: number[], window: number) => {
   const result: { avg: number | null; std: number | null; avgAbs: number | null }[] = [];
+  const buffer: number[] = [];
+  let sum = 0;
+  let sumAbs = 0;
+  let sumSq = 0;
+  let count = 0;
+
   for (let i = 0; i < values.length; i++) {
-    const start = Math.max(0, i - window + 1);
-    const slice = values.slice(start, i + 1).filter((v) => Number.isFinite(v));
-    if (slice.length < 5) {
+    const value = values[i];
+    if (Number.isFinite(value)) {
+      buffer.push(value);
+      sum += value;
+      sumAbs += Math.abs(value);
+      sumSq += value * value;
+      count += 1;
+    } else {
+      buffer.push(NaN);
+    }
+
+    if (buffer.length > window) {
+      const removed = buffer.shift();
+      if (removed !== undefined && Number.isFinite(removed)) {
+        sum -= removed;
+        sumAbs -= Math.abs(removed);
+        sumSq -= removed * removed;
+        count -= 1;
+      }
+    }
+
+    if (count < 5) {
       result.push({ avg: null, std: null, avgAbs: null });
       continue;
     }
-    const mean = slice.reduce((sum, v) => sum + v, 0) / slice.length;
-    const meanAbs = slice.reduce((sum, v) => sum + Math.abs(v), 0) / slice.length;
-    const variance = slice.reduce((sum, v) => sum + Math.pow(v - mean, 2), 0) / slice.length;
+    const mean = sum / count;
+    const meanAbs = sumAbs / count;
+    const variance = Math.max(0, sumSq / count - mean * mean);
     const std = Math.sqrt(variance);
     result.push({ avg: mean, std, avgAbs: meanAbs });
   }
   return result;
+};
+
+const toDateKey = (value: unknown): string | null => {
+  if (!value) return null;
+  if (typeof value === 'string') return value.slice(0, 10);
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value).slice(0, 10);
 };
 
 /**
@@ -55,17 +88,47 @@ router.get('/summary', async (req: Request, res: Response) => {
       return res.json(cached);
     }
 
+    // TOTAL 與 單檔（IBIT/GBTC...）會同時存在時，不能直接 SUM(value) 否則會 double count。
+    // 策略：
+    // - total_net_flow_usd：優先使用 name='TOTAL'；若不存在則用 name<>'TOTAL' 的合計
+    // - product_count：只計算單檔產品（排除 TOTAL）
     const result = await pool.query(
-      `SELECT 
-        time::date AS flow_date,
-        SUM(value) AS total_net_flow_usd,
-        COUNT(DISTINCT name) AS product_count
-      FROM global_indicators
-      WHERE category = 'etf'
-        AND metadata->>'asset_type' = $1
-        AND time >= CURRENT_DATE - INTERVAL '1 day' * $2
-      GROUP BY flow_date
-      ORDER BY flow_date DESC`,
+      `
+      WITH totals AS (
+        SELECT time::date AS flow_date, value::numeric AS total_net_flow_usd
+        FROM global_indicators
+        WHERE category = 'etf'
+          AND metadata->>'asset_type' = $1
+          AND name = 'TOTAL'
+          AND time >= CURRENT_DATE - INTERVAL '1 day' * $2
+      ),
+      fallback_totals AS (
+        SELECT time::date AS flow_date, SUM(value)::numeric AS total_net_flow_usd
+        FROM global_indicators
+        WHERE category = 'etf'
+          AND metadata->>'asset_type' = $1
+          AND name <> 'TOTAL'
+          AND time >= CURRENT_DATE - INTERVAL '1 day' * $2
+        GROUP BY flow_date
+      ),
+      products AS (
+        SELECT time::date AS flow_date, COUNT(DISTINCT name) AS product_count
+        FROM global_indicators
+        WHERE category = 'etf'
+          AND metadata->>'asset_type' = $1
+          AND name <> 'TOTAL'
+          AND time >= CURRENT_DATE - INTERVAL '1 day' * $2
+        GROUP BY flow_date
+      )
+      SELECT
+        COALESCE(t.flow_date, f.flow_date) AS flow_date,
+        COALESCE(t.total_net_flow_usd, f.total_net_flow_usd) AS total_net_flow_usd,
+        COALESCE(p.product_count, 0) AS product_count
+      FROM totals t
+      FULL JOIN fallback_totals f ON f.flow_date = t.flow_date
+      LEFT JOIN products p ON p.flow_date = COALESCE(t.flow_date, f.flow_date)
+      ORDER BY flow_date DESC
+      `,
       [assetType, days]
     );
 
@@ -91,7 +154,7 @@ router.get('/summary', async (req: Request, res: Response) => {
     res.json({ data: enrichedData });
   } catch (error) {
     console.error('Error fetching ETF summary:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    return sendError(res, error, 'Failed to fetch ETF summary');
   }
 });
 
@@ -150,9 +213,12 @@ router.get('/analytics', async (req: Request, res: Response) => {
 
     const priceByDate = new Map<string, number>();
     for (const row of priceRows.rows) {
-      priceByDate.set(row.date, parseFloat(row.close));
+      const key = toDateKey(row.date);
+      if (!key) continue;
+      priceByDate.set(key, parseFloat(row.close));
     }
 
+    // 單檔資料（issuer/product 分析用）: 排除 TOTAL
     const productResult = await pool.query(
       `SELECT
           time::date as date,
@@ -163,6 +229,22 @@ router.get('/analytics', async (req: Request, res: Response) => {
         FROM global_indicators
         WHERE category = 'etf'
           AND metadata->>'asset_type' = $1
+          AND name <> 'TOTAL'
+          AND time >= CURRENT_DATE - INTERVAL '1 day' * $2
+        ORDER BY date ASC`,
+      [assetType, days]
+    );
+
+    // 總流向（避免 double count）：優先使用 TOTAL
+    const totalResult = await pool.query(
+      `SELECT
+          time::date as date,
+          value as total_net_flow_usd,
+          (metadata->>'total_aum_usd')::numeric as total_aum_usd
+        FROM global_indicators
+        WHERE category='etf'
+          AND metadata->>'asset_type' = $1
+          AND name='TOTAL'
           AND time >= CURRENT_DATE - INTERVAL '1 day' * $2
         ORDER BY date ASC`,
       [assetType, days]
@@ -174,6 +256,8 @@ router.get('/analytics', async (req: Request, res: Response) => {
         total_net_flow_usd: number;
         product_count: Set<string>;
         total_aum_usd: number;
+        total_net_flow_override?: number;
+        total_aum_override?: number;
         issuerTotals: Map<string, number>;
         productTotals: Map<string, number>;
       }
@@ -181,8 +265,26 @@ router.get('/analytics', async (req: Request, res: Response) => {
 
     const gbtcIbitDaily = new Map<string, { gbtc: number; ibit: number }>();
 
+    for (const row of totalResult.rows) {
+      const date = toDateKey(row.date);
+      if (!date) continue;
+      const totalNet = row.total_net_flow_usd ? parseFloat(row.total_net_flow_usd) : 0;
+      const totalAum = row.total_aum_usd ? parseFloat(row.total_aum_usd) : 0;
+      const entry = byDate.get(date) || {
+        total_net_flow_usd: 0,
+        product_count: new Set<string>(),
+        total_aum_usd: 0,
+        issuerTotals: new Map<string, number>(),
+        productTotals: new Map<string, number>(),
+      };
+      entry.total_net_flow_override = totalNet;
+      if (totalAum > 0) entry.total_aum_override = totalAum;
+      byDate.set(date, entry);
+    }
+
     for (const row of productResult.rows) {
-      const date = row.date;
+      const date = toDateKey(row.date);
+      if (!date) continue;
       const flow = parseFloat(row.net_flow_usd);
       const aum = row.total_aum_usd ? parseFloat(row.total_aum_usd) : 0;
       const issuer = row.issuer || 'Unknown';
@@ -213,20 +315,24 @@ router.get('/analytics', async (req: Request, res: Response) => {
 
     const dates = Array.from(byDate.keys()).sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
 
-    const totals = dates.map((date) => byDate.get(date)!.total_net_flow_usd);
+    const totals = dates.map((date) => {
+      const entry = byDate.get(date)!;
+      return entry.total_net_flow_override !== undefined ? entry.total_net_flow_override : entry.total_net_flow_usd;
+    });
     const rollingStats = calculateRollingStats(totals, DEFAULT_ROLLING_WINDOW);
 
     let cumulative = 0;
     const enrichedData = dates
       .map((date, idx) => {
         const entry = byDate.get(date)!;
-        const totalNet = entry.total_net_flow_usd;
+        const totalNet = entry.total_net_flow_override !== undefined ? entry.total_net_flow_override : entry.total_net_flow_usd;
         cumulative += totalNet;
 
         const btcClose = priceByDate.get(date) || null;
         const netFlowBtc = btcClose ? totalNet / btcClose : null;
 
-        const flowPctAum = entry.total_aum_usd > 0 ? totalNet / entry.total_aum_usd : null;
+        const totalAum = entry.total_aum_override !== undefined ? entry.total_aum_override : entry.total_aum_usd;
+        const flowPctAum = totalAum > 0 ? totalNet / totalAum : null;
 
         const rolling = rollingStats[idx];
         const avgAbs = rolling.avgAbs;
@@ -337,7 +443,7 @@ router.get('/analytics', async (req: Request, res: Response) => {
     res.json(response);
   } catch (error) {
     console.error('Error fetching ETF analytics:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    return sendError(res, error, 'Failed to fetch ETF analytics');
   }
 });
 
@@ -365,10 +471,14 @@ router.get('/products', async (req: Request, res: Response) => {
         metadata->>'issuer' as issuer,
         metadata->>'asset_type' as asset_type,
         value as net_flow_usd,
-        (metadata->>'total_aum_usd')::numeric as total_aum_usd
+        (metadata->>'total_aum_usd')::numeric as total_aum_usd,
+        (metadata->>'nav_per_share')::numeric as nav_per_share,
+        (metadata->>'market_price')::numeric as market_price,
+        (metadata->>'premium_rate')::numeric as premium_rate
       FROM global_indicators
       WHERE category = 'etf'
         AND metadata->>'asset_type' = $1
+        AND name <> 'TOTAL'
         AND time >= CURRENT_DATE - INTERVAL '1 day' * $2
       ORDER BY date DESC, net_flow_usd DESC`,
       [assetType, days]
@@ -381,7 +491,10 @@ router.get('/products', async (req: Request, res: Response) => {
       issuer: row.issuer,
       asset_type: row.asset_type,
       net_flow_usd: parseFloat(row.net_flow_usd),
-      total_aum_usd: row.total_aum_usd ? parseFloat(row.total_aum_usd) : null
+      total_aum_usd: row.total_aum_usd ? parseFloat(row.total_aum_usd) : null,
+      nav_per_share: row.nav_per_share ? parseFloat(row.nav_per_share) : null,
+      market_price: row.market_price ? parseFloat(row.market_price) : null,
+      premium_rate: row.premium_rate ? parseFloat(row.premium_rate) : null,
     }));
 
     // 快取 10 分鐘
@@ -390,7 +503,7 @@ router.get('/products', async (req: Request, res: Response) => {
     res.json({ data });
   } catch (error) {
     console.error('Error fetching ETF products:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    return sendError(res, error, 'Failed to fetch ETF products');
   }
 });
 
@@ -419,6 +532,7 @@ router.get('/top-issuers', async (req: Request, res: Response) => {
       FROM global_indicators
       WHERE category = 'etf'
         AND metadata->>'asset_type' = $1
+        AND name <> 'TOTAL'
         AND time >= CURRENT_DATE - INTERVAL '1 day' * $2
       GROUP BY issuer
       ORDER BY total_net_flow DESC`,
@@ -438,7 +552,7 @@ router.get('/top-issuers', async (req: Request, res: Response) => {
     res.json({ data });
   } catch (error) {
     console.error('Error fetching top issuers:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    return sendError(res, error, 'Failed to fetch top issuers');
   }
 });
 

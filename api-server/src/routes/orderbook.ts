@@ -3,6 +3,9 @@ import { query } from '../database/pool';
 import { CacheService } from '../database/cache';
 import { logger } from '../utils/logger';
 import { RedisKeys } from '../shared/utils/RedisKeys';
+import { sendError } from '../shared/utils/sendError';
+import { ErrorType } from '../shared/errors/ErrorClassifier';
+import { clampLimit } from '../shared/utils/limits';
 
 const router = Router();
 const cache = new CacheService(2); // 2 seconds cache for orderbook
@@ -12,7 +15,7 @@ router.get('/:exchange/:symbol', async (req: Request, res: Response) => {
   try {
     const exchange = String(req.params.exchange);
     const symbol = String(req.params.symbol);
-    const limit = parseInt(String(req.query.limit || '100')) || 100;
+    const limit = clampLimit(req.query.limit, { defaultValue: 100, max: 200 });
 
     const cacheKey = cache.makeKey('orderbook', exchange, symbol, limit);
     const cached = await cache.get(cacheKey);
@@ -34,7 +37,11 @@ router.get('/:exchange/:symbol', async (req: Request, res: Response) => {
     );
 
     if (marketResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Market not found' });
+      return sendError(res, null, 'Market not found', {
+        statusCode: 404,
+        errorType: ErrorType.NOT_FOUND,
+        errorCode: 'NOT_FOUND'
+      });
     }
 
     const marketId = marketResult.rows[0].id;
@@ -65,7 +72,7 @@ router.get('/:exchange/:symbol', async (req: Request, res: Response) => {
     res.json({ data: snapshots, cached: false });
   } catch (err) {
     logger.error('Error fetching orderbook', err);
-    res.status(500).json({ error: 'Failed to fetch orderbook data' });
+    return sendError(res, err, 'Failed to fetch orderbook data');
   }
 });
 
@@ -130,7 +137,7 @@ router.get('/:exchange/:symbol/latest', async (req: Request, res: Response) => {
     res.json({ data: snapshot, cached: false });
   } catch (err) {
     logger.error('Error fetching latest orderbook', err);
-    res.status(500).json({ error: 'Failed to fetch latest orderbook' });
+    return sendError(res, err, 'Failed to fetch latest orderbook');
   }
 });
 

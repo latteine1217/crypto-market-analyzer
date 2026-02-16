@@ -41,6 +41,7 @@ RUN apt-get update && apt-get install -y \
     libgtk-3-0 \
     libgbm1 \
     ca-certificates \
+    tzdata \
     fonts-liberation \
     xdg-utils \
     && rm -rf /var/lib/apt/lists/*

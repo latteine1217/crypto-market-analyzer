@@ -118,6 +118,7 @@ class DataQualityChecker:
                     logger.error(f"Failed to create backfill task: {e}")
             
             # 寫入品質指標（無資料情況）
+            quality_score = 0.0
             self.db.insert_quality_metrics(
                 market_id=market_id,
                 timeframe=timeframe,
@@ -128,6 +129,7 @@ class DataQualityChecker:
                 actual_count=0,
                 missing_count=expected_count,
                 missing_rate=1.0,  # 100% 缺失
+                quality_score=quality_score,
                 issues=[{
                     'type': 'no_data',
                     'message': f'No data in time range (expected {expected_count} records)'
@@ -139,6 +141,12 @@ class DataQualityChecker:
                 'timeframe': timeframe,
                 'total_records': 0,
                 'valid': False,
+                'quality_score': quality_score,
+                'expected_count': expected_count,
+                'actual_count': 0,
+                'missing_count': expected_count,
+                'missing_rate': 1.0,
+                'backfill_task_created': backfill_created,
                 'errors': [{'type': 'no_data', 'message': 'No data in range'}],
                 'warnings': []
             }
@@ -171,6 +179,7 @@ class DataQualityChecker:
 
         # 計算缺失率
         missing_rate = missing_count / expected_count if expected_count > 0 else 0.0
+        quality_score = round(max(0.0, (1.0 - missing_rate) * 100.0), 2)
 
         # 統計其他錯誤類型
         duplicate_count = 0
@@ -214,11 +223,30 @@ class DataQualityChecker:
 
         # 決定是否建立補資料任務（當缺失率超過 3% 時）
         should_create_backfill = create_backfill_tasks and missing_rate > 0.03
+        backfill_created = False
         
         if should_create_backfill:
-            self._create_backfill_tasks_from_validation(
+            created_count = self._create_backfill_tasks_from_validation(
                 market_id, timeframe, validation_result
             )
+            backfill_created = created_count > 0
+            # 若找不到具體 gap，但缺失率仍過高，建立一個粗粒度補資料任務避免漏補
+            if not backfill_created and missing_count > 0:
+                task_id = self.backfill_scheduler.create_backfill_task(
+                    market_id=market_id,
+                    data_type='ohlcv',
+                    timeframe=timeframe,
+                    start_time=start_time,
+                    end_time=end_time,
+                    priority=4,
+                    expected_records=missing_count
+                )
+                backfill_created = True
+                logger.info(
+                    f"Created fallback backfill task #{task_id} for "
+                    f"market_id={market_id}, timeframe={timeframe}, "
+                    f"missing_count={missing_count}"
+                )
 
         # 寫入新的品質指標表
         self.db.insert_quality_metrics(
@@ -231,10 +259,11 @@ class DataQualityChecker:
             actual_count=actual_count,
             missing_count=missing_count,
             missing_rate=missing_rate,
+            quality_score=quality_score,
             duplicate_count=duplicate_count,
             timestamp_error_count=timestamp_error_count,
             issues=issues,
-            backfill_task_created=should_create_backfill
+            backfill_task_created=backfill_created
         )
 
         logger.info(
@@ -246,7 +275,18 @@ class DataQualityChecker:
             f"warnings={len(validation_result['warnings'])}"
         )
 
-        return validation_result
+        result = dict(validation_result)
+        result.update({
+            'market_id': market_id,
+            'timeframe': timeframe,
+            'quality_score': quality_score,
+            'expected_count': expected_count,
+            'actual_count': actual_count,
+            'missing_count': missing_count,
+            'missing_rate': missing_rate,
+            'backfill_task_created': backfill_created
+        })
+        return result
 
     def check_all_active_markets(
         self,
@@ -283,6 +323,7 @@ class DataQualityChecker:
                     create_backfill_tasks=create_backfill_tasks
                 )
                 result['symbol'] = symbol
+                result['exchange'] = market['exchange']
                 results.append(result)
 
             except Exception as e:
@@ -290,6 +331,7 @@ class DataQualityChecker:
                 results.append({
                     'market_id': market_id,
                     'symbol': symbol,
+                    'exchange': market['exchange'],
                     'error': str(e)
                 })
 
@@ -497,7 +539,7 @@ class DataQualityChecker:
         market_id: int,
         timeframe: str,
         validation_result: Dict
-    ):
+    ) -> int:
         """
         根據驗證結果建立補資料任務
 
@@ -506,26 +548,31 @@ class DataQualityChecker:
             timeframe: 時間週期
             validation_result: 驗證結果
         """
+        created_count = 0
         # 檢查是否有缺失區間警告
         for warning in validation_result.get('warnings', []):
             if warning['type'] == 'missing_interval':
                 gaps = warning.get('details', [])
 
                 for gap in gaps:
-                    task_id = self.backfill_scheduler.create_backfill_task(
-                        market_id=market_id,
-                        data_type='ohlcv',
-                        timeframe=timeframe,
-                        start_time=gap['start_time'],
-                        end_time=gap['end_time'],
-                        priority=5,
-                        expected_records=gap['missing_count']
-                    )
-
-                    logger.info(
-                        f"Created backfill task #{task_id} for gap: "
-                        f"{gap['start_time']} - {gap['end_time']}"
-                    )
+                    try:
+                        task_id = self.backfill_scheduler.create_backfill_task(
+                            market_id=market_id,
+                            data_type='ohlcv',
+                            timeframe=timeframe,
+                            start_time=gap['start_time'],
+                            end_time=gap['end_time'],
+                            priority=5,
+                            expected_records=gap['missing_count']
+                        )
+                        created_count += 1
+                        logger.info(
+                            f"Created backfill task #{task_id} for gap: "
+                            f"{gap['start_time']} - {gap['end_time']}"
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to create gap backfill task: {e}")
+        return created_count
 
     def generate_quality_report(
         self,

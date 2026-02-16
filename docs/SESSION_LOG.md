@@ -1,3 +1,171 @@
+# Session Log - 2026-02-13
+
+## 🎯 當前進度
+
+### ✅ P0 穩定性修復（Collector Runtime Stability）
+- [x] **Funding Rate 寫入 DB 崩潰修復**: `collector-py/src/loaders/db_loader.py`
+  - 避免插入 `market_metrics.value=NULL` 造成 NOT NULL constraint failure（上游 funding_rate 為 None 時跳過）
+- [x] **OI Spike SQL 關鍵字衝突修復**: `collector-py/src/monitors/signal_monitor.py`
+  - 將 `current_time/prev_time` alias 改為 `current_ts/prev_ts`，避免被 Postgres 解析為 `current_time` keyword
+- [x] **Decimal × float 例外修復（訊號掃描）**: `collector-py/src/monitors/signal_monitor.py`
+  - 對 DB 回傳 numeric（Decimal）做 float normalization，避免比較與乘除出錯
+
+### ✅ ETF 抓取健壯性（Farside）
+- [x] **playwright-stealth API 兼容修復**: `collector-py/src/connectors/farside_etf_collector.py`
+  - 支援 `Stealth.apply_stealth_sync`（新版）與 `stealth_sync`（舊版）
+- [x] **Hybrid Cookie Reuse（落地版）**: `collector-py/src/connectors/farside_etf_collector.py`
+  - curl_cffi 優先使用身份（cookies/UA），遇到 challenge 可嘗試 Playwright 刷新身份
+  - Identity cache: `logs/etf_cookie_cache.json`（可配置 TTL/路徑）
+  - 支援手動注入 `ETF_COOKIES_JSON` / `ETF_USER_AGENT` / `ETF_CF_CLEARANCE`
+- [x] **移除 Selenium fallback（過時且無法成功）**
+  - 移除 Selenium 相關程式碼與測試，抓取階梯改為 `Playwright -> curl_cffi`
+  - 依賴移除：`selenium`、`webdriver-manager`
+  - 備註：本文較舊段落若提到 Selenium，屬歷史問題記錄，現行實作已不再使用
+
+### 🧪 測試驗證
+- `uv run pytest tests/test_signal_monitor.py -q` ✅
+- `uv run pytest tests/test_farside_etf_collector_unit.py -q` ✅
+- `uv run pytest tests/test_bitinfocharts_unit.py -q` ✅
+
+### ✅ BitInfoCharts 抓取升級（BTC Rich List）
+- [x] `collector-py/src/connectors/bitinfocharts.py`
+  - curl_cffi 主路徑（impersonate）+ 可選 Playwright fallback（身份刷新/備援）
+  - 解析改為欄位語意選表 + schema fingerprint
+  - parse 失敗自動保存 snapshot：`logs/bitinfo_snapshots/`
+- [x] `collector-py/src/tasks/external_tasks.py`
+  - rich list 當日時間點已入庫則 skip（避免無效抓取與反爬風險）
+
+# Session Log - 2026-02-15
+
+## 🎯 當前進度
+
+### ✅ BitInfoCharts 資料正確性修復（BTC Rich List）
+- [x] 修正欄位選擇：避免把 `Balance, BTC`（range）誤判為 `BTC`（總量）導致 `total_balance` 入庫錯誤  
+  - `collector-py/src/connectors/bitinfocharts.py`
+- [x] rich list 任務自動修復：若快照已存在但 `SUM(total_balance)` 明顯過低，允許重抓並 upsert 覆寫  
+  - `collector-py/src/tasks/external_tasks.py`
+- [x] 補單元測試鎖回歸  
+  - `collector-py/tests/test_bitinfocharts_unit.py`
+
+### ✅ ETF 來源切換（SoSoValue OpenAPI v2, BTC）
+- [x] 新增：`collector-py/src/connectors/sosovalue_openapi_etf_collector.py`
+  - 使用 `POST /openapi/v2/etf/historicalInflowChart`（網站公布的 total flow 原值）
+  - 只落庫 BTC（`product_code='TOTAL'`），並把 `totalNetAssets/totalValueTraded/cumNetInflow` 寫入 metadata
+  - SSL 預設使用系統 CA bundle（可用 `SOSOVALUE_CA_FILE` 覆寫）
+- [x] `collector-py/src/orchestrator.py`
+  - `ETF_SOURCE=sosovalue` 為預設（仍可切回 `ETF_SOURCE=farside`）
+- [x] `collector-py/src/tasks/external_tasks.py`
+  - 失敗時每日嘗試次數上限：`ETF_SOSO_MAX_ATTEMPTS_PER_DAY`（避免免費版配額被窗口內重試耗盡）
+
+# Session Log - 2026-02-12
+
+## 🎯 當前進度
+
+### ✅ 文件更新（Docs Refresh）
+- [x] 更新根目錄 `README.md`：架構、端口、啟動流程、現況範圍改為 Bybit 實際配置
+- [x] 更新 `api-server/README.md`：路由分組與 `markets/quality` 契約欄位
+- [x] 更新 `data-collector/README.md`：從 Binance 舊描述修正為 Bybit WS 現況
+- [x] 更新 `dashboard-ts/README.md`：端口、頁面範圍、型別契約對齊
+- [x] 更新 `configs/README.md`：移除不存在配置與失效文件引用
+
+### ✅ 完成項目
+- **P0 監督鏈路修復（Market Supervision Hotfix）**
+  - [x] **OI Spike 掃描修復**: `collector-py/src/monitors/signal_monitor.py`
+    - 修正 SQL 回傳欄位解包錯誤（5 欄解包）
+    - 增加 `prev_oi > 0` 防護，避免除零與靜默失敗
+  - [x] **爆倉方向判讀修復**: `collector-py/src/monitors/signal_monitor.py`
+    - 新增 `buy/short -> bullish`、`sell/long -> bearish` 統一映射
+    - 修正 WS 寫入 side 與訊號判讀 side 的語義不一致
+  - [x] **品質檢查任務實作**: `collector-py/src/tasks/maintenance_tasks.py`
+    - `run_quality_check_task` 由空實作改為可執行全市場品質掃描
+    - 新增結構化 summary 輸出與全失敗時 fail-fast 行為
+  - [x] **CVD Calibration 斷鏈修復**:
+    - 補上 `DatabaseLoader.get_active_markets()`（`collector-py/src/loaders/db_loader.py`）
+    - 修正 `market_anchors` 寫入後缺少 `commit` 的問題
+  - [x] **Symbol 正規化補強（避免合約格式漂移）**
+    - `parse_symbol` / `normalize_symbol` 支援 `:USDT` suffix（`collector-py/src/utils/symbol_utils.py`）
+    - `main.get_target_symbols` 改為輸出原生格式 `BTCUSDT`，避免跨模組 symbol 不一致
+  - [x] **品質補資料 fallback 強化**: `collector-py/src/quality_checker.py`
+    - 缺失率超標但無 gap 細節時，建立粗粒度 backfill task，避免漏補
+    - 回傳欄位補齊 `missing_rate/quality_score/missing_count` 供後續觀測使用
+
+### 🧪 測試驗證
+- 執行：
+  - `uv run pytest tests/test_quality_checker.py tests/test_symbol_utils.py tests/test_signal_monitor.py -q`
+- 結果：
+  - **39 passed**
+- 新增/更新測試：
+  - `collector-py/tests/test_signal_monitor.py`（OI 解包與 liquidation side 映射）
+  - `collector-py/tests/test_symbol_utils.py`（CCXT perpetual symbol 正規化）
+  - `collector-py/tests/test_quality_checker.py`（backfill API 斷言更新）
+
+### ✅ P1 完成項目（契約與一致性）
+- **Quality API / Dashboard 契約對齊**
+  - [x] `api-server/src/routes/markets.ts`
+    - `/api/markets/quality` 回傳欄位補齊：
+      - `missing_count`, `expected_count`, `actual_count`, `backfill_task_created`
+    - `quality_score` 改為：優先使用 DB value，否則以 `missing_rate` 回推
+    - `status` 統一映射為前端使用的小寫等級：
+      - `excellent / good / acceptable / poor / critical`
+  - [x] `dashboard-ts/src/types/market.ts`
+    - `DataQualityMetrics` 型別與 API 回傳一致（移除無效欄位、補 `actual_count`）
+  - [x] `dashboard-ts/src/components/DataQualityStatus.tsx`
+    - Status 顯示支援安全 fallback（未知狀態不再造成樣式錯配）
+    - Row key 納入 timeframe，避免潛在 key collision
+
+- **Symbol 全鏈路一致性（TS 端）**
+  - [x] `data-collector/src/utils/symbolUtils.ts`
+    - `parseSymbol` / `normalizeSymbol` 支援 `BTC/USDT:USDT` 格式
+    - `normalizeSymbol` 改為全域去斜線，修正 edge case
+  - [x] `data-collector/tests/symbolUtils.test.ts`
+    - 新增 perpetual symbol 測試案例
+
+### 🧪 P1 驗證結果
+- `npm run build`（`api-server/`）✅
+- `npm run type-check`（`dashboard-ts/`）✅
+- `uv run pytest tests/test_quality_checker.py tests/test_symbol_utils.py tests/test_signal_monitor.py -q`（`collector-py/`）✅ 39 passed
+
+### ✅ P1.1 完成項目（短線 + 波段訊號時框）
+- **Signal Monitor 時框升級**
+  - [x] `collector-py/src/monitors/signal_monitor.py`
+    - CVD 背離掃描改為：`5m`（短線）+ `1h/4h/1d`（波段）
+    - 新增 `TIMEFRAME_CONFIG`（lookback / min_points / threshold / horizon）
+    - 新增 `SIGNAL_TIMEFRAMES` 環境變數覆寫（預設 `5m,1h,4h,1d`）
+    - 原生時框資料不足時，自動回退到 `1m` 聚合（避免訊號斷層）
+    - 訊號 metadata 補齊 `horizon` 與 `source_timeframe`
+- **測試補齊**
+  - [x] `collector-py/tests/test_signal_monitor.py`
+    - 新增時框配置與 source timeframe fallback 測試
+
+### 🧪 P1.1 驗證結果
+- `uv run pytest tests/test_signal_monitor.py -q`（`collector-py/`）✅ 6 passed
+- `uv run pytest tests/test_signal_monitor.py tests/test_quality_checker.py tests/test_symbol_utils.py -q`（`collector-py/`）✅ 43 passed
+
+# Session Log - 2026-02-10
+
+## 🎯 當前進度
+
+### ✅ 完成項目
+- **Ollama 自動新聞上下文分析 (Smoke v2)**
+  - [x] **新增新聞特徵模組**: `collector-py/src/tasks/news_context.py`
+    - 自動抓取 Google News RSS（Crypto / ETF / Macro）
+    - 產出結構化欄位：`aggregate_sentiment`、`risk_flags`、`top_events`
+  - [x] **提示詞契約升級**: `collector-py/src/tasks/ollama_analysis.py`
+    - 輸入新增 `news_context`
+    - 輸出新增 `news_impact_assessment` 與 `action_adjustment`
+    - 新增 Ollama 呼叫重試邏輯，降低短暫連線/串流中斷影響
+  - [x] **Smoke 腳本接線完成**: `collector-py/scripts/test_ollama_analysis.py`
+    - 預設啟用新聞抓取（可 `--disable-news` 關閉）
+    - 新增 `--news-lookback-hours`、`--news-max-items`、`--timeout-seconds`
+  - [x] **測試補齊**:
+    - `collector-py/tests/test_ollama_analysis.py`
+    - `collector-py/tests/test_news_context.py`
+    - 單元測試全數通過（5 passed）
+
+### 📌 待辦 / 注意事項
+- 新聞來源目前為 RSS 聚合，建議後續加入來源可信度分級（Tier1/Tier2）與更強去重規則。
+- 若需生產化，建議把分析結果落庫到 `analysis_reports` 並接入排程器。
+
 # Session Log - 2026-02-05
 
 ## 🎯 當前進度
@@ -49,6 +217,39 @@
   - [x] **深度擴大**: REST 快照與前端深度圖由 50 提升至 100 檔，降低 imbalance 偏差。
 - **Address Tier 穩定性修正**
   - [x] **表格解析強化**: BitInfoCharts 解析改用欄位名稱偵測，避免頁面結構變動造成資料漂移。
+- **全域記憶體優化 (低風險)**
+  - [x] **Dashboard Query 快取回收**: React Query 設定 `gcTime=2m`，降低長期快取占用。
+  - [x] **Liquidity 訂單簿累積量**: 改為單次線性累加，避免 O(n^2) 與多次 slice 拷貝。
+  - [x] **ETF 圖表資料反轉**: 反轉結果共用，避免重複拷貝。
+  - [x] **SignalTimeline 音訊釋放**: 播放後關閉 AudioContext。
+  - [x] **DBFlusher marketIdCache 上限**: 設定 FIFO 淘汰避免無限成長。
+  - [x] **Farside 未知代碼上限**: 控制未知產品集合大小，防止長期累積。
+- **前端 & API 深入優化**
+  - [x] **Alert 監控重覆啟動防護**: 加入單例啟動守衛與 stop 方法。
+  - [x] **Funding Heatmap 組裝優化**: 使用 Map 索引降低 O(n^3) 掃描與暫存。
+  - [x] **ETF Rolling Stats**: 改為滑動窗口累計，避免 O(n^2) slice/reduce。
+  - [x] **Technical Page 對齊優化**: OI/FR 以雙指針對齊，降低 O(n*m)。
+  - [x] **K線刷新頻率**: OHLCV refetch 改為 5 秒，降低 heap 壓力。
+- **高優先級修復 (Modern TS+Python)**
+  - [x] **環境變數對齊**: 支援 `ENVIRONMENT`/`NODE_ENV`、`SYMBOLS/STREAMS` 與 `WS_*` fallback。
+  - [x] **錯誤輸出規格化**: API 失敗回應統一 `error` 字串 + `error_detail` 結構。
+  - [x] **API 契約基礎**: 新增 `shared/types/api_contract.json` 作為跨語言 schema 基礎。
+  - [x] **.env.example 更新**: 補齊 cache/collector 相關變數與預設值。
+- **中優先級修復**
+  - [x] **前端 refetch 分級**: 建立 `QUERY_PROFILES`，統一高/中/低頻更新策略。
+  - [x] **API limit clamp**: API 層統一最大上限，避免極端請求壓力。
+  - [x] **排程可觀測性**: 新增 scheduler 成功/失敗計數與延遲指標（Prometheus）。
+- **效能深化修復**
+  - [x] **Funding heatmap 小時數上限**: `hours` clamp 至 168，避免矩陣爆量。
+  - [x] **Technical 指標對齊優化**: OI/FR 序列獨立 memo，降低重建成本。
+  - [x] **OHLCV fallback 控制**: 高 limit 時跳過 fallback 聚合，降低 DB 壓力。
+- **效能深化修復 (Heatmap 稀疏化)**
+  - [x] **Heatmap API 轉稀疏點格式**: 改用 `points` 取代矩陣，減少 API 端矩陣生成成本。
+  - [x] **前端熱圖重建矩陣**: 前端依 `points` 重建矩陣渲染。
+- **DB Migration & Cache 策略**
+  - [x] **新增 CAGG**: `funding_rate_8h` continuous aggregate + refresh policy。
+  - [x] **API 改用 CAGG**: 熱圖查詢改由 CAGG 支援。
+  - [x] **Cache 策略說明**: README 補充 TTL 與 refetch profiles。
 
 ## 📌 待辦 / 注意事項
 - 若 ETF 產品資料缺失，需確認 Farside 抓取是否完整與 metadata issuer 正確。

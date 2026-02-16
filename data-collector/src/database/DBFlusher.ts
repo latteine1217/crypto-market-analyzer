@@ -21,6 +21,7 @@ export class DBFlusher {
   private flushing: boolean = false;
   private flushTimer: NodeJS.Timeout | null = null;
   private marketIdCache: Map<string, number> = new Map();
+  private readonly MAX_MARKET_CACHE = 2000;
   private stats = {
     totalFlushed: 0,
     lastFlushTime: 0,
@@ -504,8 +505,22 @@ export class DBFlusher {
     );
 
     const marketId = result.rows[0].id;
-    this.marketIdCache.set(cacheKey, marketId);
+    this.setMarketIdCache(cacheKey, marketId);
     return marketId;
+  }
+
+  /**
+   * 控制 marketIdCache 記憶體占用（FIFO 淘汰）
+   */
+  private setMarketIdCache(key: string, value: number): void {
+    this.marketIdCache.set(key, value);
+    if (this.marketIdCache.size <= this.MAX_MARKET_CACHE) {
+      return;
+    }
+    const oldestKey = this.marketIdCache.keys().next().value;
+    if (oldestKey) {
+      this.marketIdCache.delete(oldestKey);
+    }
   }
 
   /**

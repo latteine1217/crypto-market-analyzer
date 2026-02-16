@@ -15,6 +15,7 @@ export class OrderBookManager {
   private orderBooks: Map<string, OrderBookState> = new Map();
   private readonly SNAPSHOT_INTERVAL_MS = 60000; // 每分鐘生成一次快照
   private readonly MAX_DEPTH = 100; // 提升探測深度至 100 檔
+  private readonly REINIT_COOLDOWN_MS = 5000; // 防止錯誤 missing updates 造成 reinit 風暴
 
   constructor(private exchange: string = 'bybit') {
     log.info(`OrderBookManager initialized for ${exchange}`);
@@ -36,7 +37,8 @@ export class OrderBookManager {
         bids: new Map(snapshot.bids.map(b => [b.price, b.quantity])),
         asks: new Map(snapshot.asks.map(a => [a.price, a.quantity])),
         lastSnapshotTime: Date.now(),
-        updateCount: 0
+        updateCount: 0,
+        lastReinitAt: Date.now()
       };
 
       this.orderBooks.set(symbol, state);
@@ -91,6 +93,36 @@ export class OrderBookManager {
   }
 
   /**
+   * 以 WebSocket snapshot 覆蓋本地 state（比 REST 更能對齊 delta 的 updateId/seq）
+   */
+  public processSnapshot(snapshot: OrderBookSnapshot): boolean {
+    const symbol = snapshot.symbol;
+    const lastUpdateId = snapshot.lastUpdateId ?? 0;
+
+    if (!symbol || snapshot.bids.length === 0 || snapshot.asks.length === 0) {
+      return false;
+    }
+
+    const state: OrderBookState = {
+      symbol,
+      lastUpdateId,
+      bids: new Map(snapshot.bids.map(b => [b.price, b.quantity])),
+      asks: new Map(snapshot.asks.map(a => [a.price, a.quantity])),
+      lastSnapshotTime: Date.now(),
+      updateCount: 0,
+      lastReinitAt: Date.now()
+    };
+
+    this.orderBooks.set(symbol, state);
+    log.info(`Order book snapshot applied for ${symbol}`, {
+      lastUpdateId: state.lastUpdateId,
+      bids: state.bids.size,
+      asks: state.asks.size
+    });
+    return true;
+  }
+
+  /**
    * 處理訂單簿更新
    */
   public processUpdate(update: OrderBookUpdate): boolean {
@@ -107,13 +139,22 @@ export class OrderBookManager {
       return false;
     }
 
-    // 檢查是否有遺漏的更新
-    if (update.firstUpdateId && update.firstUpdateId > state.lastUpdateId + 1) {
+    // 檢查是否有遺漏的更新（需要 firstUpdateId 為「起始序號」才有意義）
+    if (update.firstUpdateId !== undefined && update.firstUpdateId > state.lastUpdateId + 1) {
+      const now = Date.now();
+      const lastReinitAt = state.lastReinitAt || 0;
       log.warn(`Missing updates detected for ${update.symbol}`, {
         expected: state.lastUpdateId + 1,
         received: update.firstUpdateId
       });
-      // 需要重新初始化訂單簿
+
+      // 避免 reinit 風暴
+      if (now - lastReinitAt < this.REINIT_COOLDOWN_MS) {
+        return false;
+      }
+      state.lastReinitAt = now;
+
+      // 需要重新初始化訂單簿（REST fallback；若 WS snapshot 正常，通常不會走到這）
       this.initializeOrderBook(update.symbol).catch(err => {
         log.error(`Failed to reinitialize order book`, err);
       });
@@ -222,13 +263,18 @@ export class OrderBookManager {
       };
     }
 
-    const bidVolume = sortedBids.slice(0, obiDepth).reduce((sum, b) => sum + Number(b.quantity), 0);
-    const askVolume = sortedAsks.slice(0, obiDepth).reduce((sum, a) => sum + Number(a.quantity), 0);
-    const obi = (bidVolume + askVolume) > 0 ? (bidVolume - askVolume) / (bidVolume + askVolume) : 0;
+    // 用「名目價值 (price * size)」計算 imbalance，比純 quantity 更穩定，也更貼近交易直覺
+    const bidNotional = sortedBids
+      .slice(0, obiDepth)
+      .reduce((sum, b) => sum + Number(b.price) * Number(b.quantity), 0);
+    const askNotional = sortedAsks
+      .slice(0, obiDepth)
+      .reduce((sum, a) => sum + Number(a.price) * Number(a.quantity), 0);
+    const obi = (bidNotional + askNotional) > 0 ? (bidNotional - askNotional) / (bidNotional + askNotional) : 0;
     
     // 異常值監控
     if (Math.abs(obi) > 0.9) {
-      log.warn(`Extreme OBI detected for ${symbol}: ${obi.toFixed(4)} (BidVol: ${bidVolume}, AskVol: ${askVolume})`);
+      log.warn(`Extreme OBI detected for ${symbol}: ${obi.toFixed(4)} (Bid$: ${bidNotional}, Ask$: ${askNotional})`);
     }
 
     return {

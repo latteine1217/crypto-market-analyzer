@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-手動觸發 ETF 收集任務以測試 Farside Selenium 爬蟲
+手動觸發 ETF 收集任務以測試 Farside 抓取流程（無 Selenium）
 
 執行方式：
 docker exec -it crypto_collector python /app/test_etf_collection.py
@@ -20,14 +20,14 @@ logger.add(sys.stdout, level="INFO")
 
 def main():
     logger.info("=" * 60)
-    logger.info("Manual ETF Collection Test (Farside Investors + Selenium)")
+    logger.info("Manual ETF Collection Test (Farside Investors)")
     logger.info("=" * 60)
     
     # 初始化資料庫連接（使用默認設置，從環境變數讀取）
     db = DatabaseLoader()
     
     # 初始化 Farside ETF Collector
-    collector = FarsideInvestorsETFCollector(use_selenium=True)
+    collector = FarsideInvestorsETFCollector()
     
     # 執行收集任務
     try:

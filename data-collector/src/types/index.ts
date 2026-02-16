@@ -121,6 +121,7 @@ export interface OrderBookState {
   asks: Map<number, number>;
   lastSnapshotTime: number;
   updateCount: number;
+  lastReinitAt?: number; // 避免 missing updates 造成瘋狂 re-init
 }
 
 // Flush 配置

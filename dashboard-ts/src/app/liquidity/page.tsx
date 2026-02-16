@@ -10,6 +10,7 @@ import { CVDChart } from '@/components/charts/CVDChart'
 import { OBIChart } from '@/components/charts/OBIChart'
 import FundingRateHeatmap from '@/components/charts/FundingRateHeatmap'
 import type { OrderBookLevel } from '@/types/market'
+import { QUERY_PROFILES } from '@/lib/queryProfiles'
 
 export default function LiquidityPage() {
   const [exchange, setExchange] = useState('bybit')
@@ -23,31 +24,46 @@ export default function LiquidityPage() {
   const { data: orderSizeData } = useQuery({
     queryKey: ['analytics-order-size', exchange, symbol],
     queryFn: () => fetchOrderSizeAnalytics(exchange, symbol),
-    refetchInterval: 60000, // Refresh every minute
+    ...QUERY_PROFILES.low,
   })
 
   const { data: orderbook, isLoading } = useQuery({
     queryKey: ['orderbook-latest', exchange, symbol],
     queryFn: () => fetchLatestOrderbook(exchange, symbol),
-    refetchInterval: 2000, // 每 2 秒更新
+    ...QUERY_PROFILES.high,
   })
 
   const { data: snapshots } = useQuery({
     queryKey: ['orderbook-history', exchange, symbol],
     queryFn: () => fetchOBI(exchange, symbol, 1),
-    refetchInterval: 5000,
+    ...QUERY_PROFILES.high,
   })
 
   const latestOBI = snapshots?.[0]?.obi || 0
 
   const filteredMarkets = markets?.filter(m => m.exchange === exchange)
 
+  const formatUsd = (value: number) => {
+    const abs = Math.abs(value)
+    if (abs >= 1e9) return `$${(value / 1e9).toFixed(2)}B`
+    if (abs >= 1e6) return `$${(value / 1e6).toFixed(2)}M`
+    if (abs >= 1e3) return `$${(value / 1e3).toFixed(2)}K`
+    return `$${value.toFixed(2)}`
+  }
+
   // 計算訂單簿統計資料
   const stats = useMemo(() => {
     if (!orderbook) return null
+    const totalBidsQty = orderbook.bids?.reduce((sum, b) => sum + Number(b.quantity), 0) || 0
+    const totalAsksQty = orderbook.asks?.reduce((sum, a) => sum + Number(a.quantity), 0) || 0
+    const totalBidsUsd = orderbook.bids?.reduce((sum, b) => sum + Number(b.price) * Number(b.quantity), 0) || 0
+    const totalAsksUsd = orderbook.asks?.reduce((sum, a) => sum + Number(a.price) * Number(a.quantity), 0) || 0
+
     return {
-      totalBids: orderbook.bids?.reduce((sum, b) => sum + Number(b.quantity), 0) || 0,
-      totalAsks: orderbook.asks?.reduce((sum, a) => sum + Number(a.quantity), 0) || 0,
+      totalBidsQty,
+      totalAsksQty,
+      totalBidsUsd,
+      totalAsksUsd,
       bestBid: orderbook.bids?.[0]?.price || 0,
       bestAsk: orderbook.asks?.[0]?.price || 0,
       spread: orderbook.asks && orderbook.bids 
@@ -67,16 +83,22 @@ export default function LiquidityPage() {
     // 提升展示深度至 50 檔
     const topBids = orderbook.bids?.slice(0, 100) || []
     const topAsks = orderbook.asks?.slice(0, 100) || []
+    const bidsWithCumulative: Array<OrderBookLevel & { cumulative: number }> = []
+    const asksWithCumulative: Array<OrderBookLevel & { cumulative: number }> = []
 
-    const bidsWithCumulative = topBids.map((bid, i) => ({
-      ...bid,
-      cumulative: topBids.slice(0, i + 1).reduce((sum, b) => sum + Number(b.quantity), 0),
-    }))
+    let bidCum = 0
+    for (let i = 0; i < topBids.length; i++) {
+      const bid = topBids[i]
+      bidCum += Number(bid.quantity)
+      bidsWithCumulative.push({ ...bid, cumulative: bidCum })
+    }
 
-    const asksWithCumulative = topAsks.map((ask, i) => ({
-      ...ask,
-      cumulative: topAsks.slice(0, i + 1).reduce((sum, a) => sum + Number(a.quantity), 0),
-    }))
+    let askCum = 0
+    for (let i = 0; i < topAsks.length; i++) {
+      const ask = topAsks[i]
+      askCum += Number(ask.quantity)
+      asksWithCumulative.push({ ...ask, cumulative: askCum })
+    }
 
     const maxCumulative = Math.max(
       bidsWithCumulative[bidsWithCumulative.length - 1]?.cumulative || 0,
@@ -96,7 +118,9 @@ export default function LiquidityPage() {
             <h1 className="text-2xl font-black tracking-tight">LIQUIDITY HUB</h1>
             <span className="bg-blue-500/10 text-blue-500 text-[10px] font-bold px-2 py-0.5 rounded border border-blue-500/20">LIVE MARKET</span>
           </div>
-          <p className="text-sm text-gray-500 font-medium">Order flow depth, CVD divergence and OBI monitoring</p>
+          <p className="text-sm text-gray-500 font-medium">
+            這頁回答三件事：盤口流動性在哪裡、主動買賣誰在主導（CVD）、以及槓桿壓力（Funding）。
+          </p>
         </div>
 
         <div className="flex items-center gap-3 bg-[#1e2329] p-1.5 rounded-lg border border-gray-800">
@@ -122,10 +146,8 @@ export default function LiquidityPage() {
         </div>
       </div>
 
-      <FundingRateHeatmap />
-
       {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
           <div className="stat-card glow-green">
             <span className="stat-label">Best Bid</span>
             <span className="stat-value text-[#00c073]">${Number(stats.bestBid).toLocaleString()}</span>
@@ -142,12 +164,12 @@ export default function LiquidityPage() {
             </div>
           </div>
           <div className="stat-card">
-            <span className="stat-label">Bid Liquidity</span>
-            <span className="stat-value text-[#00c073]">{stats.totalBids.toLocaleString(undefined, {maximumFractionDigits: 1})}</span>
+            <span className="stat-label">Bid Liquidity (USD)</span>
+            <span className="stat-value text-[#00c073]">{formatUsd(stats.totalBidsUsd)}</span>
           </div>
           <div className="stat-card">
-            <span className="stat-label">Ask Liquidity</span>
-            <span className="stat-value text-[#f6465d]">{stats.totalAsks.toLocaleString(undefined, {maximumFractionDigits: 1})}</span>
+            <span className="stat-label">Ask Liquidity (USD)</span>
+            <span className="stat-value text-[#f6465d]">{formatUsd(stats.totalAsksUsd)}</span>
           </div>
           <div className={clsx(
             "stat-card",
@@ -188,6 +210,8 @@ export default function LiquidityPage() {
         </div>
 
         <div className="space-y-6">
+          <FundingRateHeatmap />
+
           {/* Orderbook List Section */}
           <div className="card h-full overflow-hidden flex flex-col">
             <div className="flex items-center justify-between mb-4">

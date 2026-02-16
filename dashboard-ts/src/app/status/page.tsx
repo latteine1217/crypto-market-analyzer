@@ -4,12 +4,13 @@ import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchSystemStatus } from '@/lib/api-client';
 import { DataQualityStatus } from '@/components/DataQualityStatus';
+import { QUERY_PROFILES } from '@/lib/queryProfiles';
 
 export default function StatusPage() {
   const { data: status, isLoading, error } = useQuery({
     queryKey: ['systemStatus'],
     queryFn: fetchSystemStatus,
-    refetchInterval: 10000, // 每 10 秒刷新一次
+    ...QUERY_PROFILES.medium,
   });
 
   const getStatusColor = (s?: string) => {

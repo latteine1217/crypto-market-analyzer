@@ -74,11 +74,10 @@ def collect_fear_greed(db_loader):
 def collect_etf_flows(db_loader):
     """收集 ETF 資金流向 (365天)"""
     logger.info("\n🏦 Starting ETF Flows Collection (BTC & ETH, 365 days)...")
-    logger.info("ℹ️  This uses Selenium to bypass Cloudflare. It may take a few minutes.")
+    logger.info("ℹ️  This uses Playwright/curl_cffi hybrid strategy. It may take a few minutes.")
     
     try:
-        # 使用 Selenium 模式以繞過 Cloudflare
-        collector = FarsideInvestorsETFCollector(use_selenium=True)
+        collector = FarsideInvestorsETFCollector()
         
         # 抓取 365 天歷史
         count = collector.run_collection(db_loader, days=365)

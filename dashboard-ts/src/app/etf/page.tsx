@@ -17,6 +17,7 @@ import {
   ReferenceLine,
 } from 'recharts';
 import { fetchETFAnalytics, fetchETFProducts, fetchTopIssuers } from '@/lib/api-client';
+import { QUERY_PROFILES } from '@/lib/queryProfiles';
 
 type FlowStreak = {
   count: number;
@@ -31,19 +32,19 @@ export default function EtfPage() {
   const { data: analytics, isLoading: analyticsLoading } = useQuery({
     queryKey: ['etfAnalytics', asset, timeframe],
     queryFn: () => fetchETFAnalytics(asset, timeframe),
-    refetchInterval: 600000,
+    ...QUERY_PROFILES.tenMinutes,
   });
 
   const { data: products, isLoading: productsLoading } = useQuery({
     queryKey: ['etfProducts', asset, timeframe],
     queryFn: () => fetchETFProducts(asset, timeframe),
-    refetchInterval: 600000,
+    ...QUERY_PROFILES.tenMinutes,
   });
 
   const { data: topIssuers, isLoading: issuersLoading } = useQuery({
     queryKey: ['topIssuers', asset, timeframe],
     queryFn: () => fetchTopIssuers(asset, timeframe),
-    refetchInterval: 600000,
+    ...QUERY_PROFILES.tenMinutes,
   });
 
   const formatCurrency = (value: number) => {
@@ -71,6 +72,9 @@ export default function EtfPage() {
   };
 
   const summaryRows = analytics?.data || [];
+  const summaryRowsDesc = React.useMemo(() => {
+    return summaryRows.length > 0 ? [...summaryRows].reverse() : [];
+  }, [summaryRows]);
   const latestFlow = summaryRows[0]?.total_net_flow_usd || 0;
   const totalFlow = summaryRows.reduce((sum, item) => sum + item.total_net_flow_usd, 0);
   const avgFlow = summaryRows.length > 0 ? totalFlow / summaryRows.length : 0;
@@ -208,12 +212,12 @@ export default function EtfPage() {
             <div className="mt-3 text-[11px] text-gray-500">
               Data source:{' '}
               <Link
-                href="https://farside.co.uk/"
+                href="https://sosovalue.xyz/"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-emerald-300 hover:underline font-semibold"
               >
-                Farside Investors
+                SoSoValue
               </Link>
             </div>
           </div>
@@ -328,7 +332,7 @@ export default function EtfPage() {
               <div className="h-56 bg-gray-800/30 rounded animate-pulse"></div>
             ) : (
               <ResponsiveContainer width="100%" height={260}>
-                <ComposedChart data={[...summaryRows].reverse()}>
+                <ComposedChart data={summaryRowsDesc}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
                   <XAxis
                     dataKey="date"
@@ -518,7 +522,7 @@ export default function EtfPage() {
               <div className="h-56 bg-gray-800/30 rounded animate-pulse"></div>
             ) : (
               <ResponsiveContainer width="100%" height={240}>
-                <BarChart data={[...summaryRows].reverse()}>
+                <BarChart data={summaryRowsDesc}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
                   <XAxis
                     dataKey="date"
@@ -545,7 +549,7 @@ export default function EtfPage() {
               <div className="h-56 bg-gray-800/30 rounded animate-pulse"></div>
             ) : (
               <ResponsiveContainer width="100%" height={240}>
-                <LineChart data={[...summaryRows].reverse()}>
+                <LineChart data={summaryRowsDesc}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
                   <XAxis
                     dataKey="date"
@@ -572,7 +576,7 @@ export default function EtfPage() {
               <div className="h-56 bg-gray-800/30 rounded animate-pulse"></div>
             ) : (
               <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={[...summaryRows].reverse()}>
+                <BarChart data={summaryRowsDesc}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
                   <XAxis
                     dataKey="date"

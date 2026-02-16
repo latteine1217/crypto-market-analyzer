@@ -28,5 +28,10 @@ export const errorHandler = (
     details: apiError.details
   });
 
-  res.status(apiError.statusCode).json(apiError.toJSON());
+  const payload = apiError.toJSON();
+  res.status(apiError.statusCode).json({
+    success: payload.success,
+    error: apiError.message,
+    error_detail: payload.error
+  });
 };

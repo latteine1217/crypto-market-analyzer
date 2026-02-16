@@ -1,6 +1,8 @@
 import { Router, Request, Response } from 'express';
 import { query } from '../database/pool';
 import { logger } from '../utils/logger';
+import { sendError } from '../shared/utils/sendError';
+import { clampLimit } from '../shared/utils/limits';
 
 const router = Router();
 
@@ -47,7 +49,7 @@ router.get('/order-size', async (req: Request, res: Response) => {
     res.json({ data: result.rows });
   } catch (err) {
     logger.error('Error in order-size analytics', err);
-    res.status(500).json({ error: 'Failed to fetch order size analytics' });
+    return sendError(res, err, 'Failed to fetch order size analytics');
   }
 });
 
@@ -86,10 +88,26 @@ router.get('/cvd', async (req: Request, res: Response) => {
           AND m.symbol = (SELECT symbol FROM vars)
         LIMIT 1
       ),
+      bounds AS (
+        SELECT
+          time_bucket((SELECT bucket_interval FROM vars), NOW() - ((SELECT limit_points FROM vars) * (SELECT bucket_interval FROM vars))) AS requested_start,
+          time_bucket((SELECT bucket_interval FROM vars), NOW()) AS requested_end,
+          -- 重要：時間網格必須對齊 bucket 邊界。否則像 4h/1d 會因為 grid 起點不是 00:00/04:00 對齊而導致 join miss，整段變 0。
+          COALESCE(
+            (
+              SELECT time_bucket((SELECT bucket_interval FROM vars), MIN(bucket))
+              FROM market_cvd_1m
+              WHERE market_id = (SELECT id FROM target_market)
+                AND bucket >= time_bucket((SELECT bucket_interval FROM vars), NOW() - ((SELECT limit_points FROM vars) * (SELECT bucket_interval FROM vars)))
+            ),
+            time_bucket((SELECT bucket_interval FROM vars), NOW() - ((SELECT limit_points FROM vars) * (SELECT bucket_interval FROM vars)))
+          ) AS grid_start
+      ),
       time_grid AS (
         SELECT generate_series(
-          time_bucket((SELECT bucket_interval FROM vars), NOW() - ((SELECT limit_points FROM vars) * (SELECT bucket_interval FROM vars))),
-          time_bucket((SELECT bucket_interval FROM vars), NOW()),
+          -- 避免「前段全是 0」：若資料起始時間晚於 requested_start，從第一個有資料的「對齊後 bucket」開始畫
+          (SELECT grid_start FROM bounds),
+          (SELECT requested_end FROM bounds),
           (SELECT bucket_interval FROM vars)
         ) AS bucket
       ),
@@ -101,7 +119,7 @@ router.get('/cvd', async (req: Request, res: Response) => {
           SUM(cvd.sell_volume) AS sell_volume
         FROM market_cvd_1m cvd
         WHERE cvd.market_id = (SELECT id FROM target_market)
-          AND cvd.bucket >= time_bucket((SELECT bucket_interval FROM vars), NOW() - ((SELECT limit_points FROM vars) * (SELECT bucket_interval FROM vars)))
+          AND cvd.bucket >= (SELECT requested_start FROM bounds)
         GROUP BY 1
       ),
       filled_delta AS (
@@ -129,7 +147,7 @@ router.get('/cvd', async (req: Request, res: Response) => {
       exchange, 
       symbol, 
       bucketInterval,
-      parseInt(String(limit))
+      clampLimit(limit, { defaultValue: 1000, max: 2000 })
     ]);
 
     // 注意：Window Function 是在查詢範圍內計算的。
@@ -138,7 +156,7 @@ router.get('/cvd', async (req: Request, res: Response) => {
     res.json({ data: result.rows });
   } catch (err) {
     logger.error('Error in CVD analytics', err);
-    res.status(500).json({ error: 'Failed to fetch CVD analytics' });
+    return sendError(res, err, 'Failed to fetch CVD analytics');
   }
 });
 

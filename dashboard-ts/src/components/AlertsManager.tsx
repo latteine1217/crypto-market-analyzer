@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { fetchAlerts, createAlert, deleteAlert } from '@/lib/api-client'
 import { formatPrice } from '@/lib/utils'
 import type { Alert } from '@/types/market'
+import { QUERY_PROFILES } from '@/lib/queryProfiles'
 
 interface Props {
   currentSymbol: string
@@ -21,7 +22,7 @@ export function AlertsManager({ currentSymbol, currentPrice }: Props) {
   const { data: alerts } = useQuery({
     queryKey: ['alerts'],
     queryFn: fetchAlerts,
-    refetchInterval: 5000, 
+    ...QUERY_PROFILES.high,
   })
 
   const createMutation = useMutation({

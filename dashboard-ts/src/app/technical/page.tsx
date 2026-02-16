@@ -22,6 +22,7 @@ import { DepthChart } from '@/components/charts/DepthChart'
 import { IndicatorStats } from '@/components/IndicatorStats'
 import { AlertsManager } from '@/components/AlertsManager'
 import { SignalTimeline } from '@/components/SignalTimeline'
+import { QUERY_PROFILES } from '@/lib/queryProfiles'
 
 // Memoize components to prevent re-renders when visibility toggles
 const MemoizedMACDChart = memo(MACDChart)
@@ -78,76 +79,104 @@ function TechnicalContent() {
   const { data: ohlcv, isLoading } = useQuery({
     queryKey: ['ohlcv', exchange, symbol, timeframe],
     queryFn: () => fetchOHLCV(exchange, symbol, { limit: 2000, timeframe }),
-    refetchInterval: 2000, // 提升至 2秒，讓 K 線收盤更及時
+    ...QUERY_PROFILES.high,
   })
 
   const { data: cvdData } = useQuery({
     queryKey: ['cvd', exchange, symbol, timeframe],
     queryFn: () => fetchCVD(exchange, symbol, timeframe, 500),
-    refetchInterval: 5000, // 提升至 5秒
+    ...QUERY_PROFILES.high,
   })
 
   const { data: liquidations } = useQuery({
     queryKey: ['liquidations', exchange, symbol],
     queryFn: () => fetchLiquidations(exchange, symbol, 100),
-    refetchInterval: 5000,
+    ...QUERY_PROFILES.high,
   })
 
   const { data: orderbook } = useQuery({
     queryKey: ['orderbook', exchange, symbol],
     queryFn: () => fetchLatestOrderbook(exchange, symbol),
-    refetchInterval: 1000, // ⚡️ 1秒極速刷新 (配合 Redis 實時數據)
+    ...QUERY_PROFILES.ultra,
     enabled: visibleIndicators.depth,
   })
 
   const { data: fundingRate } = useQuery({
     queryKey: ['funding-rate', exchange, symbol],
     queryFn: () => fetchFundingRate(exchange, symbol, 100),
-    refetchInterval: 10000,
+    ...QUERY_PROFILES.medium,
     enabled: ['bybit', 'binance', 'okx'].includes((exchange || '').toLowerCase()),
   })
 
   const { data: openInterest } = useQuery({
     queryKey: ['open-interest', exchange, symbol],
     queryFn: () => fetchOpenInterest(exchange, symbol, 500),
-    refetchInterval: 10000,
+    ...QUERY_PROFILES.medium,
     enabled: ['bybit', 'binance', 'okx'].includes((exchange || '').toLowerCase()),
   })
 
   // ✅ 合併與計算指標 (必須在 useEffect 之前定義)
+  const oiSeries = useMemo(() => {
+    if (!openInterest || openInterest.length === 0) return []
+    return openInterest
+      .map(oi => ({
+        t: new Date(oi.timestamp).getTime(),
+        open_interest: oi.open_interest,
+        open_interest_usd: oi.open_interest_usd
+      }))
+      .sort((a, b) => a.t - b.t)
+  }, [openInterest])
+
+  const frSeries = useMemo(() => {
+    if (!fundingRate || fundingRate.length === 0) return []
+    return fundingRate
+      .map(fr => ({
+        t: new Date(fr.timestamp).getTime(),
+        funding_rate: fr.funding_rate
+      }))
+      .sort((a, b) => a.t - b.t)
+  }, [fundingRate])
+
   const dataWithIndicators = useMemo(() => {
     if (!ohlcv || ohlcv.length === 0) return null
     
     // 1. 基本指標計算
     const indicators = calculateAllIndicators(ohlcv)
-    
+
+    let oiIdx = 0
+    let frIdx = 0
+    const oiWindowMs = 3600000
+    const frWindowMs = 14400000
+
     // 2. 對齊 OI 與 Funding Rate (如果有)
     return indicators.map(d => {
       const ts = new Date(d.timestamp).getTime()
-      
-      // 尋找最近的 OI (OI 頻率可能較低)
+
       let oi_val = undefined
       let oi_usd = undefined
-      if (openInterest && openInterest.length > 0) {
-        // 尋找最近點邏輯（放寬到 1 小時，以對齊每小時一次的資料）
-        const closestOi = openInterest.find(oi => 
-          Math.abs(new Date(oi.timestamp).getTime() - ts) < 3600000 // 1 小時內
-        )
-        if (closestOi) {
-          oi_val = closestOi.open_interest
-          oi_usd = closestOi.open_interest_usd || undefined
+      if (oiSeries.length > 0) {
+        while (oiIdx + 1 < oiSeries.length && oiSeries[oiIdx + 1].t <= ts) {
+          oiIdx += 1
+        }
+        const current = oiSeries[oiIdx]
+        const next = oiIdx + 1 < oiSeries.length ? oiSeries[oiIdx + 1] : null
+        const candidate = next && Math.abs(next.t - ts) < Math.abs(current.t - ts) ? next : current
+        if (Math.abs(candidate.t - ts) < oiWindowMs) {
+          oi_val = candidate.open_interest
+          oi_usd = candidate.open_interest_usd || undefined
         }
       }
 
-      // 尋找最近的 Funding Rate
       let fr_val = undefined
-      if (fundingRate && fundingRate.length > 0) {
-        // 尋找最近點邏輯（放寬到 4 小時，對齊 8h 一次的資金費率）
-        const closestFr = fundingRate.find(fr => 
-          Math.abs(new Date(fr.timestamp).getTime() - ts) < 14400000 // 4 小時內
-        )
-        if (closestFr) {
-          fr_val = closestFr.funding_rate
+      if (frSeries.length > 0) {
+        while (frIdx + 1 < frSeries.length && frSeries[frIdx + 1].t <= ts) {
+          frIdx += 1
+        }
+        const current = frSeries[frIdx]
+        const next = frIdx + 1 < frSeries.length ? frSeries[frIdx + 1] : null
+        const candidate = next && Math.abs(next.t - ts) < Math.abs(current.t - ts) ? next : current
+        if (Math.abs(candidate.t - ts) < frWindowMs) {
+          fr_val = candidate.funding_rate
         }
       }
 
@@ -158,7 +187,7 @@ function TechnicalContent() {
         funding_rate: fr_val
       }
     })
-  }, [ohlcv, openInterest, fundingRate])
+  }, [ohlcv, oiSeries, frSeries])
 
   // 圖表引用管理
   const chartsRef = useRef<Map<string, IChartApi>>(new Map())
@@ -227,7 +256,7 @@ function TechnicalContent() {
         }
       })
     }
-  }, [visibleIndicators, dataWithIndicators, openInterest, fundingRate]) // 關鍵：數據變化時重新綁定同步
+  }, [visibleIndicators]) // 僅在顯示狀態改變時重新綁定同步
 
   const filteredMarkets = markets?.filter(m => m.exchange === exchange)
 

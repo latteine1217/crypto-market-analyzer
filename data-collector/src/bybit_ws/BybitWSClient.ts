@@ -169,11 +169,19 @@ export class BybitWSClient extends EventEmitter {
       }
     });
 
-    // 爆倉流：如果是 Linear 市場，訂閱全市場爆倉 (V5 特色)
-    if (isLinear && (this.config.streams.includes('liquidation') || this.config.streams.includes('trade'))) {
-      // Bybit V5 支援直接訂閱該類別下的所有爆倉，極其強大
-      args.push('liquidation.USDT'); 
-      log.info('Subscribing to ALL USDT Linear liquidations');
+    // 爆倉流：Bybit V5 需使用 allLiquidation.{symbol}
+    if (isLinear && this.config.streams.includes('liquidation')) {
+      this.config.symbols.forEach(symbol => {
+        args.push(`allLiquidation.${symbol}`);
+      });
+      log.info('Subscribing to symbol-level allLiquidation streams');
+    }
+
+    if (args.length === 0) {
+      log.warn('No WS topics to subscribe, check STREAMS config', {
+        streams: this.config.streams
+      });
+      return;
     }
 
     const subscribeMessage = {
@@ -215,7 +223,15 @@ export class BybitWSClient extends EventEmitter {
 
       // 處理訂閱確認
       if (message.op === 'subscribe') {
-        log.info('✅ Subscription confirmed', { success: message.success });
+        if (message.success === false) {
+          this.stats.errorCount++;
+          log.error('❌ Subscription rejected by Bybit', {
+            ret_msg: message.ret_msg,
+            req_id: message.req_id
+          });
+        } else {
+          log.info('✅ Subscription confirmed', { success: message.success });
+        }
         return;
       }
 
@@ -250,7 +266,7 @@ export class BybitWSClient extends EventEmitter {
       this.handleKline(data, topic);
     }
     // 處理爆倉數據
-    else if (topic.startsWith('liquidation.')) {
+    else if (topic.startsWith('allLiquidation.')) {
       this.handleLiquidation(data, topic);
     }
   }
@@ -259,31 +275,49 @@ export class BybitWSClient extends EventEmitter {
    * 處理爆倉數據
    */
   private handleLiquidation(data: any, topic: string): void {
-    const symbol = topic.split('.')[1];
+    const topicSymbol = topic.split('.')[1];
+    const liquidations = Array.isArray(data) ? data : [data];
 
-    // Bybit 爆倉數據格式: { symbol, side, price, size, updatedTime }
-    const liquidation: any = {
-      symbol: symbol,
-      side: data.side === 'Buy' ? 'buy' : 'sell', // Buy = 空單爆倉(強制買入)
-      price: parseFloat(data.price),
-      quantity: parseFloat(data.size),
-      timestamp: parseInt(data.updatedTime)
-    };
+    for (const liq of liquidations) {
+      const symbol = (liq?.symbol || liq?.s || topicSymbol || '').toUpperCase();
+      const sideRaw = liq?.side || liq?.S || '';
+      const side = sideRaw === 'Buy' || sideRaw === 'buy' ? 'buy' : 'sell';
+      const price = Number(liq?.price ?? liq?.p);
+      const quantity = Number(liq?.size ?? liq?.v ?? liq?.qty ?? liq?.q);
+      const timestamp = Number(liq?.updatedTime ?? liq?.T ?? liq?.timestamp ?? Date.now());
 
-    const queueMessage: QueueMessage = {
-      type: MessageType.LIQUIDATION,
-      exchange: 'bybit',
-      data: liquidation,
-      receivedAt: Date.now()
-    };
+      if (!symbol || !Number.isFinite(price) || !Number.isFinite(quantity) || !Number.isFinite(timestamp)) {
+        log.warn('Skip malformed liquidation payload', { topic, payload: liq });
+        continue;
+      }
 
-    this.emit('message', queueMessage);
+      const liquidation: any = {
+        symbol,
+        side,
+        price,
+        quantity,
+        timestamp
+      };
 
-    // 更新統計
-    const count = this.stats.messagesByType.get(MessageType.LIQUIDATION) || 0;
-    this.stats.messagesByType.set(MessageType.LIQUIDATION, count + 1);
-    
-    log.debug('🔥 Liquidation detected', { symbol, side: liquidation.side, value: liquidation.price * liquidation.quantity });
+      const queueMessage: QueueMessage = {
+        type: MessageType.LIQUIDATION,
+        exchange: 'bybit',
+        data: liquidation,
+        receivedAt: Date.now()
+      };
+
+      this.emit('message', queueMessage);
+
+      // 更新統計
+      const count = this.stats.messagesByType.get(MessageType.LIQUIDATION) || 0;
+      this.stats.messagesByType.set(MessageType.LIQUIDATION, count + 1);
+
+      log.debug('🔥 Liquidation detected', {
+        symbol,
+        side: liquidation.side,
+        value: liquidation.price * liquidation.quantity
+      });
+    }
   }
 
   /**
@@ -325,13 +359,18 @@ export class BybitWSClient extends EventEmitter {
   private handleOrderBook(data: any, topic: string, type: string): void {
     const symbol = topic.split('.')[2];
 
+    const parseId = (v: any): number | undefined => {
+      const n = typeof v === 'string' ? parseInt(v, 10) : typeof v === 'number' ? v : NaN;
+      return Number.isFinite(n) ? n : undefined;
+    };
+
     if (type === 'snapshot') {
       // 訂單簿快照
       const snapshot: OrderBookSnapshot = {
         symbol: symbol,
         bids: data.b.map((b: string[]) => ({ price: parseFloat(b[0]), quantity: parseFloat(b[1]) })),
         asks: data.a.map((a: string[]) => ({ price: parseFloat(a[0]), quantity: parseFloat(a[1]) })),
-        lastUpdateId: data.u,
+        lastUpdateId: parseId(data.u),
         timestamp: data.ts
       };
 
@@ -346,12 +385,16 @@ export class BybitWSClient extends EventEmitter {
 
     } else if (type === 'delta') {
       // 訂單簿更新
+      // Bybit v5 orderbook delta 可能同時提供 U(起始) / u(結束) 或僅提供 u。
+      // 若錯把 u 當作 firstUpdateId，會導致 Missing updates 偵測永遠成立，進而反覆重置 orderbook。
+      const firstUpdateId = parseId(data.U) ?? parseId(data.u);
+      const lastUpdateId = parseId(data.u) ?? parseId(data.U) ?? 0;
       const update: OrderBookUpdate = {
         symbol: symbol,
         bids: data.b.map((b: string[]) => ({ price: parseFloat(b[0]), quantity: parseFloat(b[1]) })),
         asks: data.a.map((a: string[]) => ({ price: parseFloat(a[0]), quantity: parseFloat(a[1]) })),
-        firstUpdateId: data.u,
-        lastUpdateId: data.u,
+        firstUpdateId,
+        lastUpdateId,
         timestamp: data.ts
       };
 

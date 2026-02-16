@@ -93,6 +93,7 @@ services:
       dockerfile: Dockerfile
     container_name: crypto_collector
     env_file:
+      - ./.env
       - ./collector-py/.env
     environment:
       - POSTGRES_HOST=db

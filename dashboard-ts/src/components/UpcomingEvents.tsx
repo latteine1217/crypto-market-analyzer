@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { fetchUpcomingEvents } from '@/lib/api-client';
 import type { Event } from '@/types/market';
 import { useState } from 'react';
+import { QUERY_PROFILES } from '@/lib/queryProfiles';
 
 export function UpcomingEvents() {
   const [selectedSources] = useState<string[]>(['coinmarketcal']);
@@ -12,7 +13,7 @@ export function UpcomingEvents() {
   const { data, isLoading } = useQuery({
     queryKey: ['upcoming-events', days, selectedSources.join(',')],
     queryFn: () => fetchUpcomingEvents(days),
-    refetchInterval: 300000, // 每 5 分鐘刷新
+    ...QUERY_PROFILES.slow,
   });
 
   const filteredEvents = data?.eventsByDate 

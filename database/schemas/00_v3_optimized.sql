@@ -78,6 +78,9 @@ CREATE TABLE IF NOT EXISTS market_metrics (
     PRIMARY KEY (market_id, time, name)
 );
 
+CREATE INDEX IF NOT EXISTS market_metrics_name_time_idx
+  ON market_metrics (name, time DESC);
+
 -- 爆倉數據
 CREATE TABLE IF NOT EXISTS liquidations (
     time        TIMESTAMPTZ NOT NULL,
@@ -255,6 +258,28 @@ CREATE TABLE IF NOT EXISTS price_alerts (
 SELECT create_hypertable('ohlcv', 'time', chunk_time_interval => INTERVAL '7 days', if_not_exists => TRUE);
 SELECT create_hypertable('trades', 'time', chunk_time_interval => INTERVAL '1 day', if_not_exists => TRUE);
 SELECT create_hypertable('market_metrics', 'time', chunk_time_interval => INTERVAL '7 days', if_not_exists => TRUE);
+
+-- Funding Rate 8h continuous aggregate (Heatmap acceleration)
+CREATE MATERIALIZED VIEW IF NOT EXISTS funding_rate_8h
+WITH (timescaledb.continuous) AS
+SELECT
+  time_bucket('8 hours', time) AS bucket,
+  market_id,
+  AVG(value) AS avg_rate
+FROM market_metrics
+WHERE name = 'funding_rate'
+GROUP BY bucket, market_id
+WITH NO DATA;
+
+CREATE INDEX IF NOT EXISTS funding_rate_8h_market_bucket_idx
+  ON funding_rate_8h (market_id, bucket DESC);
+
+SELECT add_continuous_aggregate_policy(
+  'funding_rate_8h',
+  start_offset => INTERVAL '30 days',
+  end_offset => INTERVAL '1 hour',
+  schedule_interval => INTERVAL '30 minutes'
+);
 SELECT create_hypertable('global_indicators', 'time', chunk_time_interval => INTERVAL '30 days', if_not_exists => TRUE);
 SELECT create_hypertable('whale_transactions', 'time', chunk_time_interval => INTERVAL '7 days', if_not_exists => TRUE);
 SELECT create_hypertable('address_tier_snapshots', 'time', chunk_time_interval => INTERVAL '30 days', if_not_exists => TRUE);

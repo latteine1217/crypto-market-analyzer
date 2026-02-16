@@ -13,9 +13,9 @@
 - 社群維護的 ETF 資料庫（例如：https://github.com/bitcoin-etf-tracker）
 - 每日自動同步
 
-方案 3: 使用 Selenium/Playwright（複雜但自動化）
-- 需安裝瀏覽器驅動
-- 可繞過 Cloudflare
+方案 3: 使用 Playwright（複雜但自動化）
+- 需安裝瀏覽器
+- 可能可繞過 Cloudflare（但不保證）
 - 維護成本較高
 
 當前實作：方案 1（CSV 匯入）

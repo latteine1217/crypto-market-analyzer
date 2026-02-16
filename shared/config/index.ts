@@ -56,7 +56,7 @@ export type Config = z.infer<typeof ConfigSchema>;
 const getEnvConfig = () => ({
   server: {
     port: process.env.PORT,
-    env: process.env.NODE_ENV,
+    env: process.env.NODE_ENV || process.env.ENVIRONMENT,
     logLevel: process.env.LOG_LEVEL,
     enableCache: process.env.ENABLE_CACHE,
     cacheTtl: process.env.CACHE_TTL,
@@ -82,8 +82,8 @@ const getEnvConfig = () => ({
     reconnectDelay: process.env.WS_RECONNECT_DELAY,
     heartbeatInterval: process.env.WS_HEARTBEAT_INTERVAL,
     maxReconnectAttempts: process.env.WS_MAX_RECONNECT_ATTEMPTS,
-    symbols: process.env.SYMBOLS,
-    streams: process.env.STREAMS,
+    symbols: process.env.SYMBOLS || process.env.WS_SYMBOLS,
+    streams: process.env.STREAMS || process.env.WS_STREAMS,
   },
 });
 

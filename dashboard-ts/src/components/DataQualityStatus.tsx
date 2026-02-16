@@ -4,8 +4,9 @@ import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchMarketQuality } from '@/lib/api-client';
 import { DataQualityMetrics } from '@/types/market';
+import { QUERY_PROFILES } from '@/lib/queryProfiles';
 
-const statusColors = {
+const statusColors: Record<string, string> = {
   excellent: 'text-green-500 bg-green-500/10',
   good: 'text-emerald-400 bg-emerald-400/10',
   acceptable: 'text-yellow-500 bg-yellow-500/10',
@@ -17,7 +18,7 @@ export const DataQualityStatus: React.FC = () => {
   const { data, isLoading, error } = useQuery({
     queryKey: ['market-quality'],
     queryFn: fetchMarketQuality,
-    refetchInterval: 60000, // 每分鐘更新一次
+    ...QUERY_PROFILES.low,
   });
 
   if (isLoading) return <div className="animate-pulse h-40 bg-slate-800/50 rounded-xl"></div>;
@@ -41,8 +42,11 @@ export const DataQualityStatus: React.FC = () => {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800">
-            {data?.map((m: DataQualityMetrics) => (
-              <tr key={`${m.exchange}-${m.symbol}`} className="hover:bg-slate-800/30 transition-colors">
+            {data?.map((m: DataQualityMetrics) => {
+              const statusKey = String(m.status || '').toLowerCase();
+              const statusClass = statusColors[statusKey] || 'text-slate-300 bg-slate-600/20';
+              return (
+              <tr key={`${m.exchange}-${m.symbol}-${m.timeframe}`} className="hover:bg-slate-800/30 transition-colors">
                 <td className="px-4 py-3">
                   <div className="flex flex-col">
                     <span className="font-medium text-slate-200 uppercase">{m.symbol}</span>
@@ -63,12 +67,12 @@ export const DataQualityStatus: React.FC = () => {
                   </span>
                 </td>
                 <td className="px-4 py-3 text-center">
-                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${statusColors[m.status]}`}>
-                    {m.status}
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${statusClass}`}>
+                    {statusKey || 'unknown'}
                   </span>
                 </td>
               </tr>
-            ))}
+            )})}
           </tbody>
         </table>
       </div>

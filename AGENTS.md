@@ -15,8 +15,8 @@
 2. **讀取最新進度** (`docs/SESSION_LOG.md`) ⭐ **最重要**  
    → 了解最新進度、當前優先級任務、待辦事項、已知問題、重要決策
 
-3. **（必要時）讀取專案狀態** (`docs/PROJECT_STATUS_REPORT.md`)  
-   → 了解整體完成度、各階段詳情、技術債務
+3. **（可選）讀取補充狀態文件**（若存在 `docs/PROJECT_STATUS_REPORT.md`）  
+   → 目前以 `docs/SESSION_LOG.md` 為主，補充文件僅作參考
 
 **工作流程**：閱讀進度 → 選擇任務 → 開發 → 測試 → 更新 `SESSION_LOG.md`
 
@@ -111,7 +111,7 @@
 
 ### 進度與狀態追蹤
 - **開發進度**: `docs/SESSION_LOG.md` - 最新進度、決策、待辦、問題追蹤
-- **專案狀態**: `docs/PROJECT_STATUS_REPORT.md` - 階段完成度、技術債務
+- **專案狀態**: 目前以 `docs/SESSION_LOG.md` 為唯一維護中的狀態來源
 
 ### 核心程式碼路徑
 - **REST Collector**: `collector-py/src/connectors/`
@@ -123,8 +123,8 @@
 ### 資料庫與監控
 - **DB Schemas**: `database/schemas/`
 - **Migrations**: `database/migrations/`
-- **Prometheus 配置**: `monitoring/prometheus/`
-- **Grafana 儀表板**: `monitoring/grafana/dashboards/`
+- **Metrics Exporter**: `collector-py/src/metrics_exporter.py`、`data-collector/src/metrics/MetricsServer.ts`
+- **監控棧說明**: 目前專案未內建 `monitoring/` 目錄（如需 Prometheus/Grafana 請外接部署）
 
 ### 部署與配置
 - **Docker Compose**: `docker-compose.yml`
@@ -156,11 +156,9 @@ npm test (在各專案目錄下)
 - Redis: `6379`
 - Dashboard: `3001` (Next.js) / `8050` (Legacy Dash)
 - API Server: `8080`
-- Prometheus: `9090`
-- Grafana: `3000` (admin/admin)
+- Prometheus/Grafana: 目前非內建服務（外接部署時再定義端口）
 
 ---
 
 **最後更新**: 2026-01-21  
 **維護原則**: 本文件聚焦核心哲學與架構規則，實施細節請查閱 `docs/SESSION_LOG.md`
-

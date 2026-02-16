@@ -220,6 +220,16 @@ class WebSocketCollector {
         } else {
           log.debug(`Order book update skipped for ${update.symbol}`);
         }
+      } else if (message.type === MessageType.ORDERBOOK_SNAPSHOT) {
+        // 使用 WS snapshot 對齊 updateId/seq，避免 REST snapshot 與 delta updateId 空間不一致造成的極端 OBI
+        const snapshot = message.data as OrderBookSnapshot;
+        const applied = this.orderBookManager.processSnapshot(snapshot);
+        if (applied) {
+          this.metricsServer.orderbookSnapshotsTotal.inc({
+            exchange: message.exchange,
+            symbol: snapshot.symbol
+          });
+        }
       }
 
       // 記錄處理時長

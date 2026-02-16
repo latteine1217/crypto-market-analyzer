@@ -3,7 +3,9 @@ import { query } from '../database/pool';
 import { CacheService } from '../database/cache';
 import { logger } from '../utils/logger';
 import { asyncHandler } from '../shared/utils/asyncHandler';
-import { Errors } from '../shared/errors/ErrorClassifier';
+import { Errors, ErrorType } from '../shared/errors/ErrorClassifier';
+import { sendError } from '../shared/utils/sendError';
+import { clampLimit } from '../shared/utils/limits';
 
 const router = Router();
 const cache = new CacheService(5); // 5 seconds cache for OHLCV
@@ -13,7 +15,7 @@ router.get('/:exchange/:symbol', asyncHandler(async (req: Request, res: Response
   const exchange = String(req.params.exchange);
   const symbol = String(req.params.symbol);
   const timeframe = String(req.query.timeframe || '1m');
-  const limit = parseInt(String(req.query.limit || '500')) || 500;
+  const limit = clampLimit(req.query.limit, { defaultValue: 500, max: 2000 });
 
   const cacheKey = cache.makeKey('ohlcv', exchange, symbol, timeframe, limit);
   const cached = await cache.get(cacheKey);
@@ -35,7 +37,11 @@ router.get('/:exchange/:symbol', asyncHandler(async (req: Request, res: Response
   };
   const intervalLiteral = intervalMap[timeframe];
   if (!intervalLiteral) {
-    return res.status(400).json({ error: `Unsupported timeframe: ${timeframe}` });
+    return sendError(res, null, `Unsupported timeframe: ${timeframe}`, {
+      statusCode: 400,
+      errorType: ErrorType.VALIDATION,
+      errorCode: 'BAD_REQUEST'
+    });
   }
 
   const nativeTimeframes = ['1m', '1h', '4h', '1d'];
@@ -77,7 +83,7 @@ router.get('/:exchange/:symbol', asyncHandler(async (req: Request, res: Response
   let ohlcv = result.rows.reverse();
 
   // 如果數據量太少且不是 1m，嘗試回溯更遠的 1m 數據
-  if (timeframe !== '1m' && ohlcv.length < Math.min(50, Math.floor(limit / 2))) {
+  if (timeframe !== '1m' && limit <= 1000 && ohlcv.length < Math.min(50, Math.floor(limit / 2))) {
     // fallback: 使用 1m 重新聚合，避免原生 timeframe 缺漏
     const fallback = await query(querySqlAgg, aggParams);
     ohlcv = fallback.rows.reverse();

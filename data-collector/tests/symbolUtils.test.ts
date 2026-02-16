@@ -51,6 +51,14 @@ describe('parseSymbol', () => {
     });
   });
 
+  describe('Perpetual format handling', () => {
+    it('should parse BTC/USDT:USDT correctly', () => {
+      const [base, quote] = parseSymbol('BTC/USDT:USDT');
+      expect(base).toBe('BTC');
+      expect(quote).toBe('USDT');
+    });
+  });
+
   describe('Invalid formats', () => {
     it('should throw error for unparseable symbol', () => {
       expect(() => parseSymbol('INVALID')).toThrow('Unable to parse symbol');
@@ -94,6 +102,10 @@ describe('normalizeSymbol', () => {
 
   it('should handle multiple slashes (edge case)', () => {
     expect(normalizeSymbol('A/B/C')).toBe('ABC');
+  });
+
+  it('should normalize perpetual format', () => {
+    expect(normalizeSymbol('BTC/USDT:USDT')).toBe('BTCUSDT');
   });
 });
 

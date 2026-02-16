@@ -110,20 +110,48 @@ router.get('/quality', cacheableQuery(
   () => 'markets:quality',
   async () => {
     const result = await query(`
-      SELECT DISTINCT ON (metadata->>'market_id', metadata->>'timeframe')
-        sl.time as check_time,
-        m.symbol,
-        e.name as exchange,
-        metadata->>'timeframe' as timeframe,
-        (metadata->>'missing_rate')::numeric as missing_rate,
-        sl.value as quality_score,
-        metadata->>'status' as status
-      FROM system_logs sl
-      JOIN markets m ON (sl.metadata->>'market_id')::int = m.id
-      JOIN exchanges e ON m.exchange_id = e.id
-      WHERE sl.level = 'QUALITY'
-        AND sl.module = 'collector'
-      ORDER BY metadata->>'market_id', metadata->>'timeframe', sl.time DESC
+      WITH latest_quality AS (
+        SELECT DISTINCT ON (metadata->>'market_id', metadata->>'timeframe')
+          sl.time as check_time,
+          m.symbol,
+          e.name as exchange,
+          metadata->>'timeframe' as timeframe,
+          (metadata->>'missing_rate')::numeric as missing_rate,
+          (metadata->>'missing_count')::int as missing_count,
+          (metadata->>'expected_count')::int as expected_count,
+          (metadata->>'actual_count')::int as actual_count,
+          COALESCE((metadata->>'backfill_task_created')::boolean, false) as backfill_task_created,
+          NULLIF(sl.value, 0) as quality_score_raw
+        FROM system_logs sl
+        JOIN markets m ON (sl.metadata->>'market_id')::int = m.id
+        JOIN exchanges e ON m.exchange_id = e.id
+        WHERE sl.level = 'QUALITY'
+          AND sl.module = 'collector'
+          AND sl.metadata ? 'market_id'
+          AND sl.metadata ? 'timeframe'
+          AND sl.metadata ? 'missing_rate'
+        ORDER BY metadata->>'market_id', metadata->>'timeframe', sl.time DESC
+      )
+      SELECT
+        check_time,
+        symbol,
+        exchange,
+        timeframe,
+        missing_rate,
+        COALESCE(quality_score_raw, ROUND(GREATEST(0, (1 - missing_rate) * 100)::numeric, 2)) as quality_score,
+        CASE
+          WHEN missing_rate <= 0.005 THEN 'excellent'
+          WHEN missing_rate <= 0.03 THEN 'good'
+          WHEN missing_rate <= 0.10 THEN 'acceptable'
+          WHEN missing_rate <= 0.20 THEN 'poor'
+          ELSE 'critical'
+        END as status,
+        missing_count,
+        expected_count,
+        actual_count,
+        backfill_task_created
+      FROM latest_quality
+      ORDER BY exchange, symbol, timeframe
     `);
     return result.rows;
   },

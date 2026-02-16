@@ -2,6 +2,8 @@ import { Router, Request, Response } from 'express';
 import { query } from '../database/pool';
 import { logger } from '../utils/logger';
 import { CacheService } from '../database/cache';
+import { sendError } from '../shared/utils/sendError';
+import { clampLimit } from '../shared/utils/limits';
 
 const router = Router();
 const cache = new CacheService(600); // 10 minutes cache for events
@@ -44,7 +46,7 @@ router.get('/upcoming', async (req: Request, res: Response) => {
       paramIndex++;
     }
 
-    const limitParam = Math.min(parseInt(limit as string), 100);  // 最多 100 筆
+    const limitParam = clampLimit(limit, { defaultValue: 50, max: 100 });
 
     const result = await query(`
       SELECT 
@@ -91,7 +93,7 @@ router.get('/upcoming', async (req: Request, res: Response) => {
     res.json(response);
   } catch (err) {
     logger.error('Error fetching upcoming events', err);
-    res.status(500).json({ error: 'Failed to fetch upcoming events' });
+    return sendError(res, err, 'Failed to fetch upcoming events');
   }
 });
 
@@ -140,7 +142,7 @@ router.get('/today', async (req: Request, res: Response) => {
     res.json({ data: response });
   } catch (err) {
     logger.error('Error fetching today events', err);
-    res.status(500).json({ error: 'Failed to fetch today events' });
+    return sendError(res, err, 'Failed to fetch today events');
   }
 });
 
@@ -183,7 +185,7 @@ router.get('/summary', async (req: Request, res: Response) => {
     res.json(response);
   } catch (err) {
     logger.error('Error fetching events summary', err);
-    res.status(500).json({ error: 'Failed to fetch events summary' });
+    return sendError(res, err, 'Failed to fetch events summary');
   }
 });
 

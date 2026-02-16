@@ -15,8 +15,8 @@
 2. **讀取最新進度** (`docs/SESSION_LOG.md`) ⭐ **最重要**  
    → 了解最新進度、當前優先級任務、待辦事項、已知問題、重要決策
 
-3. **（必要時）讀取專案狀態** (`docs/PROJECT_STATUS_REPORT.md`)  
-   → 了解整體完成度、各階段詳情、技術債務
+3. **（可選）讀取補充狀態文件**（若存在 `docs/PROJECT_STATUS_REPORT.md`）  
+   → 目前以 `docs/SESSION_LOG.md` 為主，補充文件僅作參考
 
 **工作流程**：閱讀進度 → 選擇任務 → 開發 → 測試 → 更新 `SESSION_LOG.md`
 
@@ -106,7 +106,7 @@
 
 ### 進度與狀態追蹤（經常更新）
 - **開發進度**：`docs/SESSION_LOG.md` - 最新進度、決策、待辦、問題追蹤
-- **專案狀態**：`docs/PROJECT_STATUS_REPORT.md` - 階段完成度、技術債務
+- **專案狀態**：目前以 `docs/SESSION_LOG.md` 為唯一維護中的狀態來源
 - **文檔管理**：`docs/DOC_MANAGEMENT_GUIDE.md` - 文檔生命週期規範
 
 ### 核心程式碼路徑
@@ -123,10 +123,8 @@
 ### 資料庫與監控
 - **DB schemas**：`database/schemas/`
 - **DB migration**：`database/migrations/`
-- **Metrics 導出**：`collector-py/src/metrics_exporter.py`, `data-collector/src/metrics/MetricsServer.ts`
-- **Prometheus 配置**：`monitoring/prometheus/prometheus.yml`
-- **告警規則**：`monitoring/prometheus/rules/alerts.yml`
-- **Grafana Dashboards**：`monitoring/grafana/dashboards/`
+- **Metrics 導出**：`collector-py/src/metrics_exporter.py`、`data-collector/src/metrics/MetricsServer.ts`
+- **監控棧說明**：目前專案未內建 `monitoring/` 目錄（如需 Prometheus/Grafana/Alertmanager 請外接部署）
 
 ### 部署與配置
 - **Docker Compose**：`docker-compose.yml`
@@ -136,7 +134,7 @@
 
 ### 操作指南（穩定文檔）
 - **長期測試**：`docs/LONG_RUN_TEST_GUIDE.md`
-- **Grafana 儀表板**：`docs/GRAFANA_DASHBOARDS_GUIDE.md`
+- **監控部署**：由部署環境維護 Prometheus/Grafana/Alertmanager（本倉庫未內建）
 - **郵件設定**：`docs/EMAIL_SETUP_GUIDE.md`
 - **鏈上資料收集**：`docs/BLOCKCHAIN_DATA_COLLECTION_GUIDE.md`
 - **報表使用**：`data-analyzer/REPORT_USAGE.md`
@@ -183,7 +181,7 @@ docker exec -it crypto_timescaledb psql -U crypto -d crypto_db
 SELECT COUNT(*) FROM ohlcv;
 SELECT * FROM pg_stat_activity WHERE datname = 'crypto_db';
 
-# 監控檢查
+# 監控檢查（需外接 Prometheus 時）
 curl http://localhost:9090/api/v1/targets
 curl http://localhost:8000/metrics  # Collector
 curl http://localhost:8001/metrics  # WS Collector
@@ -197,9 +195,7 @@ cd data-analyzer && pytest tests/
 ### 重要端口
 - TimescaleDB: `5432`
 - Redis: `6379`
-- Prometheus: `9090`
-- Grafana: `3000` (admin/admin)
-- Alertmanager: `9093`
+- Prometheus/Grafana/Alertmanager: 目前非內建服務（外接部署時再定義端口）
 - Jupyter: `8888`
 - Collector Metrics: `8000`
 - WS Metrics: `8001`
@@ -208,5 +204,4 @@ cd data-analyzer && pytest tests/
 
 **最後更新**: 2026-01-21
 **維護原則**: 本文件聚焦核心哲學與架構規則，專案狀態請查閱 `docs/SESSION_LOG.md`
-
 

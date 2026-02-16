@@ -2,6 +2,8 @@ import { Router, Request, Response } from 'express';
 import { query } from '../database/pool';
 import { CacheService } from '../database/cache';
 import { logger } from '../utils/logger';
+import { sendError } from '../shared/utils/sendError';
+import { clampLimit } from '../shared/utils/limits';
 
 const router = Router();
 const cache = new CacheService(10); // 10 seconds cache
@@ -11,7 +13,7 @@ router.get('/:exchange/:symbol/funding-rate', async (req: Request, res: Response
   try {
     const exchange = String(req.params.exchange);
     const symbol = String(req.params.symbol);
-    const limit = parseInt(String(req.query.limit || '100')) || 100;
+    const limit = clampLimit(req.query.limit, { defaultValue: 100, max: 1000 });
 
     const cacheKey = cache.makeKey('funding-rate', exchange, symbol, limit);
     const cached = await cache.get(cacheKey);
@@ -47,7 +49,7 @@ router.get('/:exchange/:symbol/funding-rate', async (req: Request, res: Response
     res.json({ data: fundingRates, cached: false });
   } catch (err) {
     logger.error('Error fetching funding rates', err);
-    res.status(500).json({ error: 'Failed to fetch funding rates' });
+    return sendError(res, err, 'Failed to fetch funding rates');
   }
 });
 
@@ -91,7 +93,7 @@ router.get('/:exchange/:symbol/funding-rate/latest', async (req: Request, res: R
     res.json({ data: latest, cached: false });
   } catch (err) {
     logger.error('Error fetching latest funding rate', err);
-    res.status(500).json({ error: 'Failed to fetch latest funding rate' });
+    return sendError(res, err, 'Failed to fetch latest funding rate');
   }
 });
 
@@ -100,7 +102,7 @@ router.get('/:exchange/:symbol/open-interest', async (req: Request, res: Respons
   try {
     const exchange = String(req.params.exchange);
     const symbol = String(req.params.symbol);
-    const limit = parseInt(String(req.query.limit || '100')) || 100;
+    const limit = clampLimit(req.query.limit, { defaultValue: 100, max: 1000 });
 
     const cacheKey = cache.makeKey('open-interest', exchange, symbol, limit);
     const cached = await cache.get(cacheKey);
@@ -137,7 +139,7 @@ router.get('/:exchange/:symbol/open-interest', async (req: Request, res: Respons
     res.json({ data: openInterest, cached: false });
   } catch (err) {
     logger.error('Error fetching open interest', err);
-    res.status(500).json({ error: 'Failed to fetch open interest' });
+    return sendError(res, err, 'Failed to fetch open interest');
   }
 });
 
@@ -182,7 +184,7 @@ router.get('/:exchange/:symbol/open-interest/latest', async (req: Request, res: 
     res.json({ data: latest, cached: false });
   } catch (err) {
     logger.error('Error fetching latest open interest', err);
-    res.status(500).json({ error: 'Failed to fetch latest open interest' });
+    return sendError(res, err, 'Failed to fetch latest open interest');
   }
 });
 
@@ -190,7 +192,7 @@ router.get('/:exchange/:symbol/open-interest/latest', async (req: Request, res: 
 router.get('/aggregated/open-interest', async (req: Request, res: Response) => {
   try {
     const symbol = String(req.query.symbol || 'BTCUSDT');
-    const limit = parseInt(String(req.query.limit || '100')) || 100;
+    const limit = clampLimit(req.query.limit, { defaultValue: 100, max: 500 });
 
     const cacheKey = cache.makeKey('aggregated-open-interest', symbol, limit);
     const cached = await cache.get(cacheKey);
@@ -221,7 +223,7 @@ router.get('/aggregated/open-interest', async (req: Request, res: Response) => {
     res.json({ data: aggregatedOI, cached: false });
   } catch (err) {
     logger.error('Error fetching aggregated open interest', err);
-    res.status(500).json({ error: 'Failed to fetch aggregated open interest' });
+    return sendError(res, err, 'Failed to fetch aggregated open interest');
   }
 });
 
@@ -259,15 +261,15 @@ router.get('/aggregated/open-interest/latest', async (req: Request, res: Respons
     res.json({ data: latest, cached: false });
   } catch (err) {
     logger.error('Error fetching latest aggregated open interest', err);
-    res.status(500).json({ error: 'Failed to fetch latest aggregated open interest' });
+    return sendError(res, err, 'Failed to fetch latest aggregated open interest');
   }
 });
 
 // GET /api/derivatives/funding-rate/heatmap - 取得資金費率熱力圖數據
 router.get('/funding-rate/heatmap', async (req: Request, res: Response) => {
   try {
-    const hours = parseInt(String(req.query.hours || '72')) || 72;
-    const limit = Math.min(parseInt(String(req.query.limit || '10')) || 10, 50);
+    const hours = clampLimit(req.query.hours, { defaultValue: 72, max: 168 });
+    const limit = clampLimit(req.query.limit, { defaultValue: 10, max: 50 });
     const cacheKey = cache.makeKey('funding-heatmap', hours, limit);
     const cached = await cache.get(cacheKey);
     
@@ -308,12 +310,10 @@ router.get('/funding-rate/heatmap', async (req: Request, res: Response) => {
       SELECT
         g.bucket,
         g.symbol,
-        COALESCE(AVG(mm.value), 0) as avg_rate
+        COALESCE(fr.avg_rate, 0) as avg_rate
       FROM grid g
-      LEFT JOIN market_metrics mm ON g.market_id = mm.market_id 
-        AND mm.name = 'funding_rate'
-        AND time_bucket('8 hours', mm.time) = g.bucket
-      GROUP BY g.bucket, g.symbol
+      LEFT JOIN funding_rate_8h fr ON g.market_id = fr.market_id
+        AND fr.bucket = g.bucket
       ORDER BY g.bucket ASC, g.symbol ASC
       `,
       [hours, limit]
@@ -322,21 +322,27 @@ router.get('/funding-rate/heatmap', async (req: Request, res: Response) => {
     // 格式化為 Heatmap 所需的矩陣
     const times = [...new Set(result.rows.map(r => r.bucket.toISOString()))].sort();
     const symbols = [...new Set(result.rows.map(r => r.symbol))].sort();
-    
-    const matrix = symbols.map(s => {
-      return times.map(t => {
-        const found = result.rows.find(r => r.symbol === s && r.bucket.toISOString() === t);
-        return found ? parseFloat(found.avg_rate) : null;
-      });
-    });
 
-    const heatmapData = { times, symbols, matrix };
+    const timeIndex = new Map<string, number>();
+    times.forEach((t, idx) => timeIndex.set(t, idx));
+    const symbolIndex = new Map<string, number>();
+    symbols.forEach((s, idx) => symbolIndex.set(s, idx));
+
+    const points: Array<{ t: number; s: number; v: number }> = [];
+    for (const row of result.rows) {
+      const t = timeIndex.get(row.bucket.toISOString());
+      const s = symbolIndex.get(row.symbol);
+      if (t === undefined || s === undefined) continue;
+      points.push({ t, s, v: parseFloat(row.avg_rate) });
+    }
+
+    const heatmapData = { times, symbols, points };
     await cache.set(cacheKey, heatmapData, 60); // Cache for 1 min
 
     res.json({ data: heatmapData, cached: false });
   } catch (err) {
     logger.error('Error fetching funding heatmap', err);
-    res.status(500).json({ error: 'Failed to fetch funding heatmap' });
+    return sendError(res, err, 'Failed to fetch funding heatmap');
   }
 });
 
@@ -345,7 +351,7 @@ router.get('/:exchange/:symbol/liquidations', async (req: Request, res: Response
   try {
     const exchange = String(req.params.exchange);
     const symbol = String(req.params.symbol);
-    const limit = parseInt(String(req.query.limit || '200')) || 200;
+    const limit = clampLimit(req.query.limit, { defaultValue: 200, max: 1000 });
 
     const cacheKey = cache.makeKey('liquidations', exchange, symbol, limit);
     const cached = await cache.get(cacheKey);
@@ -378,7 +384,7 @@ router.get('/:exchange/:symbol/liquidations', async (req: Request, res: Response
     res.json({ data: liquidations, cached: false });
   } catch (err) {
     logger.error('Error fetching liquidations', err);
-    res.status(500).json({ error: 'Failed to fetch liquidation data' });
+    return sendError(res, err, 'Failed to fetch liquidation data');
   }
 });
 

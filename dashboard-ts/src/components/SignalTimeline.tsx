@@ -36,6 +36,13 @@ export const SignalTimeline: React.FC<SignalTimelineProps> = ({ symbol, limit = 
 
       osc.start();
       osc.stop(ctx.currentTime + 0.1);
+      setTimeout(() => {
+        try {
+          ctx.close();
+        } catch (err) {
+          console.error('Audio context close failed', err);
+        }
+      }, 200);
     } catch (e) {
       console.error('Audio alert failed', e);
     }

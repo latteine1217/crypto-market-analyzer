@@ -1,11 +1,12 @@
 import { Router } from 'express';
 import * as blockchainService from '../services/blockchainService';
+import { clampLimit } from '../shared/utils/limits';
 
 export const blockchainRoutes = Router();
 
 blockchainRoutes.get('/whales/recent', async (req, res, next) => {
   try {
-    const limit = req.query.limit ? parseInt(req.query.limit as string) : 50;
+    const limit = clampLimit(req.query.limit, { defaultValue: 50, max: 200 });
     const data = await blockchainService.getRecentWhaleTransactions(limit);
     res.json({ data });
   } catch (error) {
@@ -16,7 +17,7 @@ blockchainRoutes.get('/whales/recent', async (req, res, next) => {
 blockchainRoutes.get('/:symbol/rich-list', async (req, res, next) => {
   try {
     const { symbol } = req.params;
-    const days = req.query.days ? parseInt(req.query.days as string) : 30;
+    const days = clampLimit(req.query.days, { defaultValue: 30, max: 365 });
     const data = await blockchainService.getRichListStats(symbol.toUpperCase(), days);
     res.json({ data });
   } catch (error) {

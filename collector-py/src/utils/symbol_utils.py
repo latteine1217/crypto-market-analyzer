@@ -23,6 +23,9 @@ def parse_symbol(symbol: str) -> Tuple[str, str]:
     """
     # 移除可能的空白
     symbol = symbol.strip()
+    # 移除 CCXT 永續合約的 settle 後綴 (例如 :USDT)
+    if ':' in symbol:
+        symbol = symbol.split(':', 1)[0]
     
     # 格式 1: BTC/USDT (CCXT 標準)
     if '/' in symbol:
@@ -58,6 +61,8 @@ def normalize_symbol(symbol: str) -> str:
     Returns:
         標準化後的 symbol (無斜線)
     """
+    if ':' in symbol:
+        symbol = symbol.split(':', 1)[0]
     return symbol.replace('/', '')
 
 

@@ -4,6 +4,7 @@ import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ComposedChart, ReferenceLine } from 'recharts';
 import { fetchETFSummary, fetchETFProducts, fetchTopIssuers } from '@/lib/api-client';
+import { QUERY_PROFILES } from '@/lib/queryProfiles';
 
 export function ETFFlowsWidget() {
   const [asset, setAsset] = React.useState<'BTC' | 'ETH'>('BTC');
@@ -12,19 +13,19 @@ export function ETFFlowsWidget() {
   const { data: summary, isLoading: summaryLoading } = useQuery({
     queryKey: ['etfSummary', asset, timeframe],
     queryFn: () => fetchETFSummary(asset, timeframe),
-    refetchInterval: 600000, // 10 分鐘
+    ...QUERY_PROFILES.tenMinutes,
   });
 
   const { data: topIssuers, isLoading: issuersLoading } = useQuery({
     queryKey: ['topIssuers', asset, timeframe],
     queryFn: () => fetchTopIssuers(asset, timeframe),
-    refetchInterval: 600000,
+    ...QUERY_PROFILES.tenMinutes,
   });
 
   const { data: products, isLoading: productsLoading } = useQuery({
     queryKey: ['etfProducts', asset, timeframe],
     queryFn: () => fetchETFProducts(asset, timeframe),
-    refetchInterval: 600000,
+    ...QUERY_PROFILES.tenMinutes,
   });
 
   const formatCurrency = (value: number) => {

@@ -64,11 +64,20 @@ export const getMarketSignals = async (limit: number = 50) => {
 };
 
 // 監控邏輯
+let alertMonitorStarted = false;
+let priceAlertTimer: NodeJS.Timeout | null = null;
+let signalTimer: NodeJS.Timeout | null = null;
+
 export const startAlertMonitor = () => {
+  if (alertMonitorStarted) {
+    logger.warn('Alert monitor already started, skipping duplicate start');
+    return;
+  }
+  alertMonitorStarted = true;
   logger.info('Starting Alert & Signal Monitor...');
   
   // 1. 價格警報監控 (Price Alerts) - 每 5 秒
-  setInterval(async () => {
+  priceAlertTimer = setInterval(async () => {
     try {
       const alerts = await getActiveAlerts();
       if (alerts.length === 0) return;
@@ -124,7 +133,7 @@ export const startAlertMonitor = () => {
   // 2. 市場訊號監控 (Market Signals) - 每 10 秒檢查是否有新訊號寫入
   let lastSignalTime = new Date(Date.now() - 60000); // Start from 1 min ago
 
-  setInterval(async () => {
+  signalTimer = setInterval(async () => {
     try {
       // 查詢比上次檢查時間更新的訊號
       const query = `
@@ -156,4 +165,17 @@ export const startAlertMonitor = () => {
       logger.error('Error in Signal Poller', error);
     }
   }, 10000);
+};
+
+export const stopAlertMonitor = () => {
+  if (priceAlertTimer) {
+    clearInterval(priceAlertTimer);
+    priceAlertTimer = null;
+  }
+  if (signalTimer) {
+    clearInterval(signalTimer);
+    signalTimer = null;
+  }
+  alertMonitorStarted = false;
+  logger.info('Alert & Signal Monitor stopped');
 };

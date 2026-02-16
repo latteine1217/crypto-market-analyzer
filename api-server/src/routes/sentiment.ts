@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import pool from '../database/pool';
 import { CacheService } from '../database/cache';
+import { sendError } from '../shared/utils/sendError';
 
 const cacheService = new CacheService();
 
@@ -45,7 +46,7 @@ router.get('/latest', async (req: Request, res: Response) => {
     res.json(response);
   } catch (error) {
     console.error('Error fetching Fear & Greed Index:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    return sendError(res, error, 'Failed to fetch Fear & Greed Index');
   }
 });
 
@@ -84,7 +85,7 @@ router.get('/history', async (req: Request, res: Response) => {
     res.json({ data });
   } catch (error) {
     console.error('Error fetching Fear & Greed history:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    return sendError(res, error, 'Failed to fetch Fear & Greed history');
   }
 });
 

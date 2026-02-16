@@ -162,6 +162,31 @@ class DatabaseLoader:
                     return {'exchange': row[0], 'symbol': row[1]}
                 return None
 
+    def get_active_markets(self, exchange_name: Optional[str] = None) -> List[Dict]:
+        """取得活躍市場列表"""
+        self.ensure_connection()
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                query = """
+                    SELECT m.id, m.symbol, e.name AS exchange
+                    FROM markets m
+                    JOIN exchanges e ON m.exchange_id = e.id
+                    WHERE m.is_active = TRUE
+                """
+                params = []
+                if exchange_name:
+                    query += " AND e.name = %s"
+                    params.append(exchange_name)
+                query += " ORDER BY m.id"
+
+                cur.execute(query, tuple(params))
+                rows = cur.fetchall()
+
+        return [
+            {'id': row[0], 'symbol': row[1], 'exchange': row[2]}
+            for row in rows
+        ]
+
     def insert_ohlcv_batch(self, market_id: int, timeframe: str, ohlcv_data: List[List]) -> int:
         """批次插入 OHLCV 數據 (V3 Schema: time 欄位)"""
         if not ohlcv_data: return 0
@@ -277,6 +302,39 @@ class DatabaseLoader:
                 conn.commit()
         return 1
 
+    def insert_system_log(
+        self,
+        *,
+        module: str,
+        level: str,
+        message: str,
+        value: float | None = None,
+        metadata: dict | None = None,
+        log_time: datetime | None = None,
+    ) -> int:
+        """插入 system_logs（通用，可用於外部來源抓取品質與狀態記錄）"""
+        self.ensure_connection()
+        import json
+
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO system_logs (time, module, level, message, value, metadata)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        log_time or datetime.now(timezone.utc),
+                        module,
+                        level,
+                        message,
+                        value,
+                        json.dumps(metadata or {}, ensure_ascii=False),
+                    ),
+                )
+                conn.commit()
+        return 1
+
     def insert_funding_rate(self, market_id: int, funding_data: Dict) -> int:
         """插入單筆資金費率"""
         return self.insert_funding_rate_batch(market_id, [funding_data])
@@ -288,6 +346,13 @@ class DatabaseLoader:
         import json
         rows = []
         for data in funding_data_list:
+            # DB 約束：market_metrics.value NOT NULL
+            # 當上游交易所未提供 funding_rate（None）時跳過，避免整批插入失敗。
+            if data.get('funding_rate') is None:
+                continue
+            if not data.get('funding_time'):
+                continue
+
             metadata = {
                 'funding_rate_daily': data.get('funding_rate_daily'),
                 'next_funding_time': str(data.get('next_funding_time')) if data.get('next_funding_time') else None,
@@ -295,7 +360,10 @@ class DatabaseLoader:
                 'index_price': data.get('index_price')
             }
             rows.append((market_id, data['funding_time'], 'funding_rate', data['funding_rate'], json.dumps(metadata)))
-        
+
+        if not rows:
+            return 0
+
         with self.get_connection() as conn:
             with conn.cursor() as cur:
                 execute_batch(cur, """
@@ -376,6 +444,17 @@ class DatabaseLoader:
                 'total_aum_usd': flow.get('total_aum_usd'),
                 'date': str(flow.get('date'))
             }
+            # SoSoValue OpenAPI 會回傳的額外欄位（可用於 dashboard/分析）
+            for key in ('total_value_traded_usd', 'cum_net_inflow_usd', 'source'):
+                if flow.get(key) is not None:
+                    metadata[key] = flow.get(key)
+            # Premium/Discount to NAV：溢價率（以 ratio 表示，例如 0.001 = +0.1%）
+            for key in ('nav_per_share', 'market_price', 'premium_rate'):
+                if flow.get(key) is not None:
+                    metadata[key] = flow.get(key)
+            for key in ('source_url', 'source_last_updated', 'schema_fingerprint', 'fetch_method'):
+                if flow.get(key) is not None:
+                    metadata[key] = flow.get(key)
             rows.append((timestamp, 'etf', flow['product_code'], flow['net_flow_usd'], json.dumps(metadata)))
         
         with self.get_connection() as conn:

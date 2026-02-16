@@ -8,6 +8,7 @@ CollectorOrchestrator
 - 預期記憶體使用從 645 MB → 150-200 MB (減少 70%)
 """
 from typing import Dict, List
+import os
 from loguru import logger
 
 from config_loader import CollectorConfig
@@ -17,6 +18,8 @@ from connectors.open_interest_collector import OpenInterestCollector
 from connectors.bitinfocharts import BitInfoChartsClient
 from connectors.fear_greed_collector import FearGreedIndexCollector
 from connectors.farside_etf_collector import FarsideInvestorsETFCollector
+from connectors.sosovalue_openapi_etf_collector import SoSoValueOpenAPIETFFlowsCollector
+from connectors.sosovalue_openapi_etf_products_collector import SoSoValueOpenAPIETFProductsCollector
 from connectors.whale_collector import WhaleCollector
 from connectors.exchange_pool import ExchangePool
 from loaders.db_loader import DatabaseLoader
@@ -56,7 +59,16 @@ class CollectorOrchestrator:
         
         # Phase 1: Macro Indicators Collectors
         self.fear_greed_collector = FearGreedIndexCollector()
-        self.etf_flows_collector = FarsideInvestorsETFCollector(use_selenium=True)
+        # ETF flows: default use SoSoValue OpenAPI (website published values).
+        # Farside scraping is kept as fallback (may fail due to anti-bot).
+        etf_source = (os.getenv("ETF_SOURCE", "sosovalue") or "sosovalue").lower()
+        if etf_source == "farside":
+            self.etf_flows_collector = FarsideInvestorsETFCollector()
+            self.etf_products_collector = None
+        else:
+            self.etf_flows_collector = SoSoValueOpenAPIETFFlowsCollector()
+            # SoSoValue 單檔 ETF metrics（用於 issuer/product 比較）
+            self.etf_products_collector = SoSoValueOpenAPIETFProductsCollector()
         
         self._init_connectors()
         self._init_derivatives_collectors()
