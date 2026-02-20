@@ -43,10 +43,10 @@ export default function Error({
           Try again
         </button>
         <button
-          onClick={() => window.location.href = '/'}
+          onClick={() => window.location.href = '/technical'}
           className="px-6 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded-md transition-colors font-medium"
         >
-          Go to Home
+          Go to Dashboard
         </button>
       </div>
       {process.env.NODE_ENV === 'development' && (

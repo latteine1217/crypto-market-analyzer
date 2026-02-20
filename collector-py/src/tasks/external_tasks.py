@@ -95,6 +95,8 @@ def run_etf_flows_task(orchestrator):
     count_total = 0
     count_products = 0
     error_message = None
+    attempted_fetch = False
+    skipped_due_to_limit = False
     try:
         latest_et_date = _latest_btc_etf_et_date(orchestrator)
         if latest_et_date is not None and latest_et_date >= today_et:
@@ -128,6 +130,7 @@ def run_etf_flows_task(orchestrator):
                               AND level='ETF_FLOWS_FETCH'
                               AND (time AT TIME ZONE 'America/New_York')::date = %s
                               AND metadata->>'source' = 'sosovalue'
+                              AND COALESCE(metadata->>'attempted_fetch', 'false') = 'true'
                             """,
                             (today_et,),
                         )
@@ -136,6 +139,7 @@ def run_etf_flows_task(orchestrator):
                             logger.warning(
                                 f"SoSoValue ETF fetch attempts reached {attempts}/{max_attempts} for ET date {today_et}, skip"
                             )
+                            skipped_due_to_limit = True
                             return
             except Exception as e:
                 logger.warning(f"Failed to check SoSoValue daily attempts: {e}")
@@ -153,6 +157,7 @@ def run_etf_flows_task(orchestrator):
                 )
                 lookback_days = effective_days
 
+        attempted_fetch = True
         count = orchestrator.etf_flows_collector.run_collection(orchestrator.db, days=lookback_days)
         count_total = int(count or 0)
         if count_total > 0:
@@ -186,14 +191,31 @@ def run_etf_flows_task(orchestrator):
         logger.error(f"ETF flows collection failed: {e}")
     finally:
         # 記錄抓取品質到 system_logs（用於監控與配額稽核）
-        # 注意：即使失敗也要記錄，才能讓「每日最大嘗試次數」有效，避免在窗口內一直重試燒配額。
+        # 僅在「實際對來源發起抓取」時記錄 ETF_FLOWS_FETCH，避免 skip 事件把嘗試次數越加越大。
         try:
+            if skipped_due_to_limit:
+                orchestrator.db.insert_system_log(
+                    module="collector",
+                    level="ETF_FLOWS_SKIP_LIMIT",
+                    message="ETF flows fetch skipped due to daily attempt limit",
+                    value=0.0,
+                    metadata={
+                        "source": "sosovalue" if etf_source != "farside" else "farside",
+                        "asset_type": "BTC",
+                        "today_et": str(today_et),
+                    },
+                )
+
+            if not attempted_fetch and error_message is None:
+                return
+
             meta = {
                 "source": "sosovalue" if etf_source != "farside" else "farside",
                 "asset_type": "BTC",
                 "rows_inserted_total": int(count_total or 0),
                 "rows_inserted_products": int(count_products or 0),
                 "rows_inserted": int((count_total or 0) + (count_products or 0)),
+                "attempted_fetch": bool(attempted_fetch),
             }
             if error_message:
                 meta["error_message"] = error_message

@@ -199,29 +199,32 @@ export function calculateBollingerBands(
 // Williams Fractal
 export function calculateFractals(
   highs: number[],
-  lows: number[]
+  lows: number[],
+  period: number = 5
 ): {
   up: boolean[];
   down: boolean[];
 } {
   const up: boolean[] = [];
   const down: boolean[] = [];
+  const halfWindow = Math.max(1, Math.floor(period / 2));
   
   for (let i = 0; i < highs.length; i++) {
-    // Fractal Up: high[i] > high[i-2], high[i] > high[i-1], high[i] > high[i+1], high[i] > high[i+2]
-    if (i >= 2 && i < highs.length - 2) {
-      const isUp =
-        highs[i] > highs[i - 2] &&
-        highs[i] > highs[i - 1] &&
-        highs[i] > highs[i + 1] &&
-        highs[i] > highs[i + 2];
+    if (i >= halfWindow && i < highs.length - halfWindow) {
+      let isUp = true;
+      let isDown = true;
+
+      for (let offset = 1; offset <= halfWindow; offset++) {
+        if (!(highs[i] > highs[i - offset] && highs[i] > highs[i + offset])) {
+          isUp = false;
+        }
+        if (!(lows[i] < lows[i - offset] && lows[i] < lows[i + offset])) {
+          isDown = false;
+        }
+        if (!isUp && !isDown) break;
+      }
+
       up.push(isUp);
-      
-      const isDown =
-        lows[i] < lows[i - 2] &&
-        lows[i] < lows[i - 1] &&
-        lows[i] < lows[i + 1] &&
-        lows[i] < lows[i + 2];
       down.push(isDown);
     } else {
       up.push(false);
@@ -247,7 +250,7 @@ export function calculateAllIndicators(data: OHLCVData[]): OHLCVWithIndicators[]
   const rsi14 = calculateRSI(closes, 14);
   const { macd, signal: macdSignal, histogram: macdHist } = calculateMACD(closes);
   const { upper: bbUpper, middle: bbMiddle, lower: bbLower } = calculateBollingerBands(closes);
-  const fractals = calculateFractals(highs, lows);
+  const fractals = calculateFractals(highs, lows, 12);
   
   return data.map((d, i) => ({
     ...d,

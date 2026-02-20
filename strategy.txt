@@ -1,0 +1,532 @@
+//@version=6
+// Crypto Perp Strategy v1.3
+//
+// Changelog v1.3（based on v6.4）：
+// [1] 策略重命名：使用語意版本號取代描述性標示組合
+// [2] 移除 coreEntryCondS 中的冗餘條件（shortGate 已含所有空頭過濾）
+// [3] Regime Exit 條件修正：useStrictRegime 旗標現在同時控制出場邏輯
+// [4] Break-even 加入狀態旗標，避免盤中觸發後回落導致提早出場
+// [5] TP1 重掛保護：部分平倉後停止重掛同 ID 限價單
+// [6] MFE 基準改用 position_avg_price，加碼策略下更準確
+//
+// Bugfix v1.3.1：
+// [B1] Time Stop 加碼保護：lastAddBarIdx 追蹤最後加碼時機，minAddHoldBars 保護期內不觸發
+// [B2] 熔斷改用高水位（peakEquity）計算回撤，防止牛市高點後大回吐仍不觸發
+// [B3] shortGate 改用 bearFilter（對稱 bullFilter），useStrictRegime 現同時控制多空進場
+
+strategy("Crypto Perp Strategy v1.3",
+     overlay           = true,
+     initial_capital   = 100000,
+     currency          = currency.USD,
+     default_qty_type  = strategy.fixed,
+     default_qty_value = 0,
+     pyramiding        = 3,
+     commission_type   = strategy.commission.percent,
+     commission_value  = 0.06)
+
+// ==================== Inputs: 策略開關 ====================
+enableLong  = input.bool(true,  "啟用做多（Long）",  group="策略開關")
+enableShort = input.bool(true,  "啟用做空（Short）", group="策略開關")
+
+riskMode   = input.string("Aggressive", "Risk Mode（風險模式）",
+     options = ["Conservative", "Balanced", "Aggressive"], group="策略開關")
+sizingMode = input.string("Risk%", "Sizing Mode（倉位模式）",
+     options = ["Equity%", "Risk%"], group="策略開關")
+
+slipBuf = input.float(0.30, "滑價緩衝（Risk% sizing 用，例 0.30=+30%）",
+     minval=0.0, step=0.05, group="策略開關")
+
+// ==================== Inputs: 指標參數 ====================
+fastLen   = input.int(12, "MACD Fast",   minval=1, group="指標參數")
+slowLen   = input.int(26, "MACD Slow",   minval=1, group="指標參數")
+signalLen = input.int(9,  "MACD Signal", minval=1, group="指標參數")
+
+lenShort = input.int(20,  "SMA 20",  minval=1, group="指標參數")
+lenMid   = input.int(60,  "SMA 60",  minval=1, group="指標參數")
+lenLong  = input.int(100, "SMA 100", minval=1, group="指標參數")
+
+atrLen    = input.int(14, "ATR Length", minval=1, group="指標參數")
+adxLen    = input.int(14, "ADX Length",       minval=1, group="指標參數")
+adxSmooth = input.int(14, "ADX Smoothing",    minval=1, group="指標參數")
+
+useStrictRegime = input.bool(false, "嚴格排列：多頭(快>中>慢) / 空頭(快<中<慢)", group="指標參數")
+useRegimeExit   = input.bool(true,  "Regime 翻轉就出場",                          group="指標參數")
+
+// ==================== Inputs: 加碼參數 ====================
+addLookback1 = input.int(30,    "Add1 突破回看長度",       minval=5,          group="加碼參數")
+addLookback2 = input.int(20,    "Add2 突破回看長度",       minval=5,          group="加碼參數")
+add2GateR    = input.float(1.0, "Add2 浮盈門檻（R 倍數）", minval=0.1, step=0.1, group="加碼參數")
+
+// ==================== Inputs: 出場控制 ====================
+useBreakEven = input.bool(true,   "啟用 Break-even（達到一定 R 後把停損推到入場價）", group="出場控制")
+beAfterR     = input.float(1.0,   "推到 Break-even 門檻（R 倍數）", minval=0.1, step=0.1, group="出場控制")
+
+macdExitCore   = input.bool(false, "MACD Exit 同步出 Core（預設只砍加碼腿）", group="出場控制")
+useTimeStop    = input.bool(true,  "啟用 Time Stop（久盤不動則退出）",        group="出場控制")
+maxBarsInTrade = input.int(60,   "最多持倉 K 棒數（超過則評估退出）", minval=10, group="出場控制")
+minMoveATR     = input.float(0.5, "最小有利波動（ATR 倍數）", minval=0.0, step=0.1, group="出場控制")
+minAddHoldBars = input.int(15,   "加碼腿最短保護期（K棒，Time Stop 不提早踢出）", minval=1, group="出場控制")
+
+// ==================== Inputs: 風險上限 ====================
+maxNotionalMult = input.float(5,     "最大曝險倍數（Notional Cap / 有效槓桿上限）", minval=0.1, step=0.1,  group="風險上限")
+atrPctFloor     = input.float(0.004, "ATR% 下限（例：0.004=0.4%）",                minval=0.0, step=0.001, group="風險上限")
+
+useDrawdownStop  = input.bool(true,   "啟用回撤熔斷（虧損達門檻後停止開新倉）",       group="風險上限")
+maxDrawdownPct   = input.float(15.0,  "最大回撤門檻（% of high-water mark，非初始資本）",
+     minval=1.0, step=0.5, group="風險上限")
+
+// ==================== Inputs: 做多濾網 ====================
+useLongAdxFilter   = input.bool(true,  "做多啟用 ADX 濾網",                             group="做多濾網")
+adxMinLong         = input.float(22,   "做多 ADX 門檻", minval=1, step=1,               group="做多濾網")
+
+useLongVolFilter   = input.bool(true,  "做多啟用量能爆發過濾",                           group="做多濾網")
+volMultLong        = input.float(1.1,  "進場成交量需大於均值幾倍", minval=1.0, step=0.1, group="做多濾網")
+
+useLongSlopeFilter = input.bool(true,  "做多啟用慢線斜率濾網",                           group="做多濾網")
+longSlopeLen       = input.int(20,     "慢線斜率回看長度", minval=1,                     group="做多濾網")
+
+useLongTieredTP    = input.bool(true,  "做多啟用 1.5R 部分止盈（TP1）",                 group="做多濾網")
+longRiskScale      = input.float(1.0,  "做多倉位縮放（0=不做多, 1=原始）",
+     minval=0.0, maxval=1.0, step=0.05, group="做多濾網")
+
+// ==================== Inputs: 做空濾網 ====================
+adxMin    = input.float(20, "做空 ADX 門檻（越高越嚴格）", minval=1, step=1, group="做空濾網")
+
+useShortTP = input.bool(true,  "啟用做空固定 R 止盈（TP limit）",                        group="做空濾網")
+tpR_S      = input.float(1.5,  "做空 TP（R 倍數）", minval=0.1, step=0.1,               group="做空濾網")
+
+shortUseTrail  = input.bool(false, "做空使用 Trailing（建議先關閉）",                    group="做空濾網")
+shortTrailMult = input.float(6.0,  "做空 Trailing 倍數（ATR）", minval=0.1, step=0.1,   group="做空濾網")
+
+maxStretchATR = input.float(1.8, "做空追擊上限（距離快線最多幾倍 ATR）",
+     minval=0.1, step=0.1, group="做空濾網")
+
+useShortSlopeFilter = input.bool(true, "做空啟用慢線斜率濾網",       group="做空濾網")
+shortSlopeLen       = input.int(20,    "慢線斜率回看長度", minval=1,  group="做空濾網")
+
+shortAllowAdds = input.bool(false, "做空允許加碼（Add1/Add2）",       group="做空濾網")
+shortRiskScale = input.float(1.0,  "做空倉位縮放（0=不做空, 1=原始）",
+     minval=0.0, maxval=1.0, step=0.05, group="做空濾網")
+
+// ==================== Risk Map ====================
+float corePctEq   = na
+float add1PctEq   = na
+float add2PctEq   = na
+float coreRiskPct = na
+float add1RiskPct = na
+float add2RiskPct = na
+float atrSLMult   = na
+float atrTRMult   = na
+
+if riskMode == "Conservative"
+    corePctEq   := 3.0
+    add1PctEq   := 2.0
+    add2PctEq   := 1.0
+    coreRiskPct := 0.60
+    add1RiskPct := 0.40
+    add2RiskPct := 0.20
+    atrSLMult   := 3.2
+    atrTRMult   := 6.0
+else if riskMode == "Balanced"
+    corePctEq   := 5.0
+    add1PctEq   := 3.0
+    add2PctEq   := 2.0
+    coreRiskPct := 0.90
+    add1RiskPct := 0.60
+    add2RiskPct := 0.35
+    atrSLMult   := 2.8
+    atrTRMult   := 5.0
+else  // Aggressive
+    corePctEq   := 7.0
+    add1PctEq   := 4.0
+    add2PctEq   := 3.0
+    coreRiskPct := 1.20
+    add1RiskPct := 0.80
+    add2RiskPct := 0.50
+    atrSLMult   := 2.5
+    atrTRMult   := 4.0
+
+// ==================== Indicators ====================
+[macd_val, macd_signal, _] = ta.macd(close, fastLen, slowLen, signalLen)
+macdCrossUp   = ta.crossover(macd_val, macd_signal)  and macd_val > 0
+macdCrossDown = ta.crossunder(macd_val, macd_signal) and macd_val < 0
+
+macdExitLong  = macd_val < 0
+macdExitShort = macd_val > 0
+
+// 三線命名改為 Fast/Mid/Slow，消除 lenLong=100 卻稱 sma200 的歧義
+smaFast = ta.ema(close, lenShort)
+smaMid  = ta.sma(close, lenMid)
+smaSlow = ta.sma(close, lenLong)
+
+bullSoft         = close > smaSlow
+bullStructStrict = smaFast > smaMid and smaMid > smaSlow
+bearSoft         = close < smaSlow
+bearStructStrict = smaFast < smaMid and smaMid < smaSlow
+
+// 多空雙方 Regime 邏輯對稱：useStrictRegime 同時控制做多與做空進場條件
+bullFilter = useStrictRegime ? (bullSoft and bullStructStrict) : bullSoft
+bearFilter = useStrictRegime ? (bearSoft and bearStructStrict) : bearSoft
+
+regimeFlipExitLong  = useRegimeExit and (useStrictRegime ? bearStructStrict : (close < smaSlow))
+regimeFlipExitShort = useRegimeExit and (useStrictRegime ? bullStructStrict : (close > smaSlow))
+
+atr = ta.atr(atrLen)
+
+highest1 = ta.highest(high[1], addLookback1)
+highest2 = ta.highest(high[1], addLookback2)
+lowest1  = ta.lowest(low[1],  addLookback1)
+lowest2  = ta.lowest(low[1],  addLookback2)
+
+[_, _, adxVal] = ta.dmi(adxLen, adxSmooth)
+
+// ==================== Long Filters ====================
+volMa20     = ta.sma(volume, 20)
+volSpike    = volume > (volMa20 * volMultLong)
+longSlopeOk = not useLongSlopeFilter or (smaSlow - smaSlow[longSlopeLen] > 0)
+longAdxOk   = not useLongAdxFilter   or (adxVal >= adxMinLong)
+
+longGate = bullFilter and longAdxOk and longSlopeOk and (not useLongVolFilter or volSpike)
+
+// ==================== Short Filters ====================
+// stretchOkS / slopeOkS 合入 shortGate，與 longGate 結構對稱（邏輯不變）
+// bearFilter 與 bullFilter 一致：useStrictRegime 同時控制多空
+slopeSlow  = smaSlow - smaSlow[shortSlopeLen]
+stretchOkS = (smaFast - close) <= maxStretchATR * atr
+slopeOkS   = not useShortSlopeFilter or (slopeSlow < 0)
+
+shortGate = bearFilter and (adxVal >= adxMin) and stretchOkS and slopeOkS
+
+// ==================== Helpers ====================
+// 以權益百分比計算交易數量
+f_qty_equityPct(percent) =>
+    capitalToUse = strategy.equity * (percent / 100.0)
+    close > 0 ? (capitalToUse / close) : 0.0
+
+// 一次迴圈掃描所有開倉，同時回傳四個加碼腿的存在狀態
+// 取代原本 4 次獨立的 f_has_open_entry 呼叫
+f_scan_open_legs() =>
+    bool _hasAdd1L = false
+    bool _hasAdd2L = false
+    bool _hasAdd1S = false
+    bool _hasAdd2S = false
+    for i = 0 to strategy.opentrades - 1
+        string _eid = strategy.opentrades.entry_id(i)
+        if _eid == "Add1L"
+            _hasAdd1L := true
+        else if _eid == "Add2L"
+            _hasAdd2L := true
+        else if _eid == "Add1S"
+            _hasAdd1S := true
+        else if _eid == "Add2S"
+            _hasAdd2S := true
+    [_hasAdd1L, _hasAdd2L, _hasAdd1S, _hasAdd2S]
+
+// 套用名義曝險上限，防止超過 maxNotionalMult 倍槓桿
+f_apply_notional_cap(qtyProposed) =>
+    capQty        = (strategy.equity * maxNotionalMult) / close
+    currentAbsQty = math.abs(strategy.position_size)
+    remainQty     = math.max(capQty - currentAbsQty, 0)
+    math.min(qtyProposed, remainQty)
+
+// 以風險百分比計算交易數量（需提供停損距離）
+f_qty_riskPct(riskPct, stopDist) =>
+    riskDollars = strategy.equity * (riskPct / 100.0)
+    stopDist > 0 ? (riskDollars / stopDist) : 0.0
+
+// Per-leg 出場管理：為每條腿設定停損、Break-even、Trailing、TP1
+// _eid:      腿的 entry ID
+// _dir:      +1=多, -1=空
+// _ep:       腿的進場價
+// _R:        1R 距離（atrSLMult × ATR）
+// _trailOff: Trailing 絕對偏移量
+// _useTrail: 是否啟用 Trailing
+// _useTP:    是否設定 TP1 限價單
+// _tpR:      TP 倍數（R）
+// _tpPct:        TP1 出場數量百分比
+// _beTriggered:  該腿 BE 是否已觸發（外部 var 旗標，鎖定後不重置）
+// _tp1Sent:      該腿 TP1 是否已掛過（外部 var 旗標，只掛一次）
+// 回傳：[beTriggerNow, tp1SentNow]
+f_manage_leg(_eid, _dir, _ep, _R, _trailOff, _useTrail, _useTP, _tpR, _tpPct, _beTriggered, _tp1Sent) =>
+    // 1) 基礎停損
+    float stop = _dir == 1 ? (_ep - _R) : (_ep + _R)
+
+    // 2) Break-even：獲利達門檻後把停損推至進場價（一旦觸發則持續生效）
+    bool beTriggerNow = false
+    if useBreakEven
+        float prof = _dir == 1 ? (close - _ep) : (_ep - close)
+        if _beTriggered or prof >= beAfterR * _R
+            stop         := _dir == 1 ? math.max(stop, _ep) : math.min(stop, _ep)
+            beTriggerNow := true
+
+    stop := math.max(stop, 0.0)
+
+    // 3) 保護單（停損 + 選擇性 Trailing）
+    if _useTrail
+        strategy.exit("PX_" + _eid, from_entry=_eid, stop=stop, trail_offset=_trailOff)
+    else
+        strategy.exit("PX_" + _eid, from_entry=_eid, stop=stop)
+
+    // 4) TP1 限價單（選擇性，只掛一次）
+    bool tp1SentNow = _tp1Sent
+    if _useTP and not _tp1Sent
+        float tp = _dir == 1 ? (_ep + _tpR * _R) : (_ep - _tpR * _R)
+        tp := math.max(tp, 0.0)
+        strategy.exit("TP1_" + _eid, from_entry=_eid, limit=tp, qty_percent=_tpPct)
+        tp1SentNow := true
+
+    [beTriggerNow, tp1SentNow]  // 回傳狀態，供呼叫端更新外部旗標
+
+// ==================== State ====================
+hasLong  = strategy.position_size > 0
+hasShort = strategy.position_size < 0
+hasPos   = strategy.position_size != 0
+posDir   = hasLong ? 1 : hasShort ? -1 : 0
+
+var float atrEntryEff = na   // campaign ATR（用於計算 R）
+var float mfe         = 0.0
+var int   barsInTrade = 0
+var int   lastAddBarIdx = -1  // 最後一次加碼進場的 bar_index（-1 表示尚無加碼）
+
+// Break-even 狀態旗標：各腿觸發後鎖定，不隨收盤價重置
+var bool beCoreL = false
+var bool beAdd1L = false
+var bool beAdd2L = false
+var bool beCoreS = false
+var bool beAdd1S = false
+var bool beAdd2S = false
+
+// TP1 狀態旗標：各腿只掛一次 TP1 限價單，避免成交後連續縮量止盈
+var bool tp1CoreL = false
+var bool tp1Add1L = false
+var bool tp1Add2L = false
+var bool tp1CoreS = false
+var bool tp1Add1S = false
+var bool tp1Add2S = false
+
+if not hasPos
+    atrEntryEff   := na
+    mfe           := 0.0
+    barsInTrade   := 0
+    lastAddBarIdx := -1
+    beCoreL := false
+    beAdd1L := false
+    beAdd2L := false
+    beCoreS := false
+    beAdd1S := false
+    beAdd2S := false
+    tp1CoreL := false
+    tp1Add1L := false
+    tp1Add2L := false
+    tp1CoreS := false
+    tp1Add1S := false
+    tp1Add2S := false
+else
+    barsInTrade += 1
+
+// ==================== Drawdown Circuit Breaker ====================
+// 以高水位（peak equity）計算回撤，防止策略在高點後大幅回吐利潤仍不觸發熔斷
+var float peakEquity = strategy.initial_capital
+peakEquity  := math.max(peakEquity, strategy.equity)
+float ddPct        = (peakEquity - strategy.equity) / peakEquity * 100.0
+bool  circuitBreak = useDrawdownStop and ddPct >= maxDrawdownPct
+
+// ==================== Entries ====================
+// --- Core Long ---
+coreEntryCondL = not circuitBreak and enableLong and (longRiskScale > 0) and longGate and macdCrossUp and close > smaFast and not hasPos
+if coreEntryCondL
+    atrFloorNow    = atrPctFloor * close
+    atrEntryEff   := math.max(atr, atrFloorNow)
+    stopDist       = atrSLMult * atrEntryEff
+    stopDistSizing = sizingMode == "Risk%" ? stopDist * (1.0 + slipBuf) : stopDist
+    coreQtyRaw     = sizingMode == "Equity%" ? f_qty_equityPct(corePctEq) : f_qty_riskPct(coreRiskPct, stopDistSizing)
+    coreQtyRaw    := coreQtyRaw * longRiskScale
+    coreQty        = f_apply_notional_cap(coreQtyRaw)
+    if coreQty > 0
+        strategy.entry("CoreL", strategy.long, qty=coreQty)
+
+// --- Core Short ---
+// shortGate 已含 stretchOkS / slopeOkS，條件等價於原版
+coreEntryCondS = not circuitBreak and enableShort and (shortRiskScale > 0) and shortGate and macdCrossDown and close < smaFast and not hasPos
+if coreEntryCondS
+    atrFloorNow    = atrPctFloor * close
+    atrEntryEff   := math.max(atr, atrFloorNow)
+    stopDist       = atrSLMult * atrEntryEff
+    stopDistSizing = sizingMode == "Risk%" ? stopDist * (1.0 + slipBuf) : stopDist
+    coreQtyRaw     = sizingMode == "Equity%" ? f_qty_equityPct(corePctEq) : f_qty_riskPct(coreRiskPct, stopDistSizing)
+    coreQtyRaw    := coreQtyRaw * shortRiskScale
+    coreQty        = f_apply_notional_cap(coreQtyRaw)
+    if coreQty > 0
+        strategy.entry("CoreS", strategy.short, qty=coreQty)
+
+// --- MFE 更新（campaign 層級，以加權均價為基準，反映加碼後的真實浮盈）---
+if hasPos
+    float avgPx = strategy.position_avg_price
+    mfe := posDir == 1  ? math.max(mfe, high - avgPx) :
+           posDir == -1 ? math.max(mfe, avgPx - low)  :
+           mfe
+
+[hasAdd1L, hasAdd2L, hasAdd1S, hasAdd2S] = f_scan_open_legs()
+
+// --- Add1 Long ---
+add1CondL = not circuitBreak and enableLong and hasLong and bullFilter and longAdxOk and (not hasAdd1L) and ta.crossover(close, highest1)
+if add1CondL
+    stopDist       = atrSLMult * nz(atrEntryEff, atr)
+    stopDistSizing = sizingMode == "Risk%" ? stopDist * (1.0 + slipBuf) : stopDist
+    add1QtyRaw     = sizingMode == "Equity%" ? f_qty_equityPct(add1PctEq) : f_qty_riskPct(add1RiskPct, stopDistSizing)
+    add1QtyRaw    := add1QtyRaw * longRiskScale
+    add1Qty        = f_apply_notional_cap(add1QtyRaw)
+    if add1Qty > 0
+        strategy.entry("Add1L", strategy.long, qty=add1Qty)
+        lastAddBarIdx := bar_index
+
+// --- Add1 Short（選擇性）---
+add1CondS = not circuitBreak and enableShort and hasShort and shortAllowAdds and shortGate and (not hasAdd1S) and ta.crossunder(close, lowest1)
+if add1CondS
+    stopDist       = atrSLMult * nz(atrEntryEff, atr)
+    stopDistSizing = sizingMode == "Risk%" ? stopDist * (1.0 + slipBuf) : stopDist
+    add1QtyRaw     = sizingMode == "Equity%" ? f_qty_equityPct(add1PctEq) : f_qty_riskPct(add1RiskPct, stopDistSizing)
+    add1QtyRaw    := add1QtyRaw * shortRiskScale
+    add1Qty        = f_apply_notional_cap(add1QtyRaw)
+    if add1Qty > 0
+        strategy.entry("Add1S", strategy.short, qty=add1Qty)
+        lastAddBarIdx := bar_index
+
+// --- Add2 進場門檻：依 campaign 停損距離計算浮盈 ---
+// nz fallback：無持倉時 avgPrice = close，profitL/S = 0，profitGateOk 必然 false
+avgPrice     = nz(strategy.position_avg_price, close)
+atrUsedGate  = nz(atrEntryEff, atr)
+stopDistGate = atrSLMult * atrUsedGate
+
+profitL       = close - avgPrice
+profitS       = avgPrice - close
+profitGateOkL = hasLong  and profitL >= add2GateR * stopDistGate
+profitGateOkS = hasShort and profitS >= add2GateR * stopDistGate
+
+// --- Add2 Long ---
+add2CondL = not circuitBreak and enableLong and hasLong and bullFilter and longAdxOk and hasAdd1L and (not hasAdd2L) and profitGateOkL and close > smaMid and ta.crossover(close, highest2)
+if add2CondL
+    stopDistSizing = sizingMode == "Risk%" ? stopDistGate * (1.0 + slipBuf) : stopDistGate
+    add2QtyRaw     = sizingMode == "Equity%" ? f_qty_equityPct(add2PctEq) : f_qty_riskPct(add2RiskPct, stopDistSizing)
+    add2QtyRaw    := add2QtyRaw * longRiskScale
+    add2Qty        = f_apply_notional_cap(add2QtyRaw)
+    if add2Qty > 0
+        strategy.entry("Add2L", strategy.long, qty=add2Qty)
+        lastAddBarIdx := bar_index
+
+// --- Add2 Short（選擇性）---
+add2CondS = not circuitBreak and enableShort and hasShort and shortAllowAdds and shortGate and hasAdd1S and (not hasAdd2S) and profitGateOkS and close < smaMid and ta.crossunder(close, lowest2)
+if add2CondS
+    stopDistSizing = sizingMode == "Risk%" ? stopDistGate * (1.0 + slipBuf) : stopDistGate
+    add2QtyRaw     = sizingMode == "Equity%" ? f_qty_equityPct(add2PctEq) : f_qty_riskPct(add2RiskPct, stopDistSizing)
+    add2QtyRaw    := add2QtyRaw * shortRiskScale
+    add2Qty        = f_apply_notional_cap(add2QtyRaw)
+    if add2Qty > 0
+        strategy.entry("Add2S", strategy.short, qty=add2Qty)
+        lastAddBarIdx := bar_index
+
+// ==================== Exits (per-leg manager) ====================
+// 做多 TP 參數：從 exit loop 提取為具名常數（原值不變）
+float LONG_TP_R   = 1.5
+float LONG_TP_PCT = 40.0
+
+if hasPos
+    float atrUsed   = nz(atrEntryEff, atr)
+    float R         = atrSLMult * atrUsed
+    float trailOffL = math.max(atrTRMult     * atrUsed, 0.0)
+    float trailOffS = math.max(shortTrailMult * atrUsed, 0.0)
+    float tpPct_S   = shortUseTrail ? 40.0 : 100.0  // 與迴圈索引無關，提出 loop 外
+
+    for i = 0 to strategy.opentrades - 1
+        string eid = strategy.opentrades.entry_id(i)
+        float  ep  = strategy.opentrades.entry_price(i)
+
+        // 多腿：Trailing 常開，選擇性 TP1（1.5R / 40%，只掛一次）
+        if eid == "CoreL"
+            [beR, tp1R] = f_manage_leg(eid, +1, ep, R, trailOffL, true, useLongTieredTP, LONG_TP_R, LONG_TP_PCT, beCoreL, tp1CoreL)
+            beCoreL  := beR
+            tp1CoreL := tp1R
+        if eid == "Add1L"
+            [beR, tp1R] = f_manage_leg(eid, +1, ep, R, trailOffL, true, useLongTieredTP, LONG_TP_R, LONG_TP_PCT, beAdd1L, tp1Add1L)
+            beAdd1L  := beR
+            tp1Add1L := tp1R
+        if eid == "Add2L"
+            [beR, tp1R] = f_manage_leg(eid, +1, ep, R, trailOffL, true, useLongTieredTP, LONG_TP_R, LONG_TP_PCT, beAdd2L, tp1Add2L)
+            beAdd2L  := beR
+            tp1Add2L := tp1R
+
+        // 空腿：Trailing 選擇性，TP1 全出或部分（依 Trailing 開關決定，只掛一次）
+        if eid == "CoreS"
+            [beR, tp1R] = f_manage_leg(eid, -1, ep, R, trailOffS, shortUseTrail, useShortTP, tpR_S, tpPct_S, beCoreS, tp1CoreS)
+            beCoreS  := beR
+            tp1CoreS := tp1R
+        if eid == "Add1S"
+            [beR, tp1R] = f_manage_leg(eid, -1, ep, R, trailOffS, shortUseTrail, useShortTP, tpR_S, tpPct_S, beAdd1S, tp1Add1S)
+            beAdd1S  := beR
+            tp1Add1S := tp1R
+        if eid == "Add2S"
+            [beR, tp1R] = f_manage_leg(eid, -1, ep, R, trailOffS, shortUseTrail, useShortTP, tpR_S, tpPct_S, beAdd2S, tp1Add2S)
+            beAdd2S  := beR
+            tp1Add2S := tp1R
+
+// ==================== Signal-based Forced Exits ====================
+// MACD 走弱：先砍加碼腿；若 macdExitCore 開啟則同步出 Core
+// 強制出場後同步清除對應 BE/TP1 旗標，防止同 campaign 再次加碼時繼承舊狀態
+if hasLong and macdExitLong
+    if hasAdd2L
+        strategy.close("Add2L", comment="MACD Exit Add2L")
+        beAdd2L  := false
+        tp1Add2L := false
+    if hasAdd1L
+        strategy.close("Add1L", comment="MACD Exit Add1L")
+        beAdd1L  := false
+        tp1Add1L := false
+    if macdExitCore
+        strategy.close("CoreL", comment="MACD Exit CoreL")
+        beCoreL  := false
+        tp1CoreL := false
+
+if hasShort and macdExitShort
+    if hasAdd2S
+        strategy.close("Add2S", comment="MACD Exit Add2S")
+        beAdd2S  := false
+        tp1Add2S := false
+    if hasAdd1S
+        strategy.close("Add1S", comment="MACD Exit Add1S")
+        beAdd1S  := false
+        tp1Add1S := false
+    if macdExitCore
+        strategy.close("CoreS", comment="MACD Exit CoreS")
+        beCoreS  := false
+        tp1CoreS := false
+
+// Regime 翻轉：全平
+if hasLong and regimeFlipExitLong
+    strategy.close("CoreL", comment="Regime Exit L")
+    strategy.close("Add1L", comment="Regime Exit L")
+    strategy.close("Add2L", comment="Regime Exit L")
+
+if hasShort and regimeFlipExitShort
+    strategy.close("CoreS", comment="Regime Exit S")
+    strategy.close("Add1S", comment="Regime Exit S")
+    strategy.close("Add2S", comment="Regime Exit S")
+
+// Time Stop：持倉久但獲利不足（加碼腿在 minAddHoldBars 內不觸發）
+if hasPos and useTimeStop
+    atrUsedTS      = nz(atrEntryEff, atr)
+    everEnoughMove = mfe >= (minMoveATR * atrUsedTS)
+    addProtected   = lastAddBarIdx >= 0 and (bar_index - lastAddBarIdx) < minAddHoldBars
+    if barsInTrade >= maxBarsInTrade and not everEnoughMove and not addProtected
+        if hasLong
+            strategy.close("CoreL", comment="Time Stop L")
+            strategy.close("Add1L", comment="Time Stop L")
+            strategy.close("Add2L", comment="Time Stop L")
+        if hasShort
+            strategy.close("CoreS", comment="Time Stop S")
+            strategy.close("Add1S", comment="Time Stop S")
+            strategy.close("Add2S", comment="Time Stop S")
+
+// ==================== Visual ====================
+plot(smaFast, color=color.new(color.yellow, 0), title="SMA Fast")
+plot(smaMid,  color=color.new(color.orange, 0), title="SMA Mid")
+plot(smaSlow, color=color.new(color.red,    0), title="SMA Slow")

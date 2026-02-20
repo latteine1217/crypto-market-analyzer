@@ -1,3 +1,252 @@
+# Session Log - 2026-02-16
+
+## 🎯 當前進度
+
+### ✅ Technical K 線強化（VPVR + Williams Fractal，2026-02-17）
+- [x] **新增籌碼分佈（VPVR）開關，預設關閉**
+  - `dashboard-ts/src/app/technical/page.tsx`
+  - Indicators Toggle 新增 `VPVR`
+- [x] **新增威廉分型（Williams Fractal）開關，預設關閉**
+  - `dashboard-ts/src/app/technical/page.tsx`
+  - Indicators Toggle 新增 `FRACTAL`
+- [x] **主圖新增可視區間分價成交量面板（Visible Range Volume Profile）**
+  - `dashboard-ts/src/components/charts/LightweightCandlestickChart.tsx`
+  - 依主圖可視範圍即時重算價格區間成交量，右側顯示 volume profile
+- [x] **主圖新增威廉分型標記（marker）**
+  - `dashboard-ts/src/components/charts/LightweightCandlestickChart.tsx`
+  - Fractal Up/Down 以 K 線 marker 呈現，並與既有爆倉 marker 合併
+- [x] **指標單元測試補強**
+  - `dashboard-ts/src/lib/__tests__/indicators.test.ts`
+  - 新增 `calculateFractals` 基本型態檢查
+- [x] **顯示修正（v5 marker API + VPVR fallback）**
+  - `dashboard-ts/src/components/charts/LightweightCandlestickChart.tsx`
+  - 改用 `createSeriesMarkers`（`lightweight-charts@5.1.0` 相容）
+  - VPVR 在可視範圍事件尚未回傳時，改用當前資料全區間先行計算，避免開啟後空白
+- [x] **分型參數調整與 VPVR 可視範圍容錯**
+  - `dashboard-ts/src/lib/indicators.ts`
+  - Williams Fractal 改為可配置 period，主流程使用 `period=12`
+  - `dashboard-ts/src/components/charts/LightweightCandlestickChart.tsx`
+  - VPVR 新增 logical range fallback（時間範圍轉換失敗時仍可計算）
+  - VPVR/圖例 overlay 提升 z-index，避免被 canvas 蓋住
+- [x] **VPVR POC 區間全圖標註**
+  - `dashboard-ts/src/components/charts/LightweightCandlestickChart.tsx`
+  - 將 VPVR 峰值（POC）所在價格區間映射為主 K 線區域的灰色半透明橫向帶，覆蓋整張圖表寬度
+- [x] **VPVR 對齊修正 + 30 等分 + POC 中心線**
+  - `dashboard-ts/src/components/charts/LightweightCandlestickChart.tsx`
+  - VPVR 分層由 24 調整為 30 bins
+  - POC 灰帶改用 `priceToCoordinate` 轉換為圖表座標，避免與 VPVR 區間錯位
+  - 新增 POC 中心價細線（橫跨整張 K 線圖）
+
+### ✅ Dashboard 首頁移除與精簡（Phase 1）
+- [x] **移除 Home Page 路由內容**: `dashboard-ts/src/app/page.tsx`
+  - `/` 改為直接 redirect 到 `/technical`，不再渲染大型首頁聚合 UI
+- [x] **導覽與錯誤回退路徑對齊**
+  - `dashboard-ts/src/components/Navbar.tsx`
+    - 移除 `Home` 導覽項
+    - 品牌連結由 `/` 改為 `/technical`
+  - `dashboard-ts/src/app/error.tsx`
+    - 錯誤頁 fallback 按鈕改為導向 `/technical`
+- [x] **刪除未使用元件（降低維護面積）**
+  - 刪除：`dashboard-ts/src/components/UpcomingEvents.tsx`
+  - 刪除：`dashboard-ts/src/components/ETFFlowsWidget.tsx`
+- [x] **移除對應 dead code**
+  - `dashboard-ts/src/lib/api-client.ts`
+    - 移除 `fetchUpcomingEvents`、`fetchTodayEvents`
+    - 移除無用型別 import
+  - `dashboard-ts/src/types/market.ts`
+    - 移除 `Event` / `EventMetadata` / `EventsByDate` / `UpcomingEventsResponse`
+
+### 🧪 測試驗證
+- `npm run type-check`（`dashboard-ts/`）✅
+
+### ✅ Dashboard 深層精簡（Phase 2：未引用元件與 API 清理）
+- [x] **刪除深層未引用元件**
+  - 刪除：`dashboard-ts/src/components/FearGreedWidget.tsx`
+  - 刪除：`dashboard-ts/src/components/charts/RichListChart.tsx`
+- [x] **清理未使用 API 函式（frontend client）**: `dashboard-ts/src/lib/api-client.ts`
+  - 移除：`fetchMarketPrices`
+  - 移除：`fetchMarketSummary`
+  - 移除：`fetchOrderbook`
+  - 移除：`fetchLatestFundingRate`
+  - 移除：`fetchLatestOpenInterest`
+  - 移除：`fetchFearGreed`
+  - 移除：`fetchETFSummary`
+- [x] **清理對應未使用型別**: `dashboard-ts/src/types/market.ts`
+  - 移除：`MarketPrice`
+  - 移除：`MarketSummary`
+  - 移除：`FearGreedData`
+  - 移除：`ETFFlowSummary`
+
+### 🧪 Phase 2 驗證結果
+- `npm run build`（`dashboard-ts/`）✅
+- `npm run type-check`（`dashboard-ts/`）✅
+
+### ✅ 專案深層瘦身（Phase 3：孤立模組與產物清理）
+- [x] **collector-py 刪除未接線孤立檔（無 import、無排程入口）**
+  - 刪除：`collector-py/src/connectors/economic_calendar_collector.py`
+  - 刪除：`collector-py/src/connectors/finnhub_calendar_collector.py`
+  - 刪除：`collector-py/src/connectors/simple_etf_collector.py`
+  - 刪除：`collector-py/src/connectors/etf_flows_collector_original.py`
+  - 刪除：`collector-py/src/schedulers/task_scheduler.py`
+  - 刪除：`collector-py/src/schedulers/retention_monitor_scheduler.py`
+- [x] **api-server 清理 `src/` 混入的非 TS 產物（避免來源樹污染）**
+  - 刪除：`api-server/src/shared/config/index.js`
+  - 刪除：`api-server/src/shared/utils/RedisKeys.d.ts`
+  - 刪除：`api-server/src/shared/utils/RedisKeys.d.ts.map`
+  - 刪除：`api-server/src/shared/utils/RedisKeys.js`
+  - 刪除：`api-server/src/shared/utils/RedisKeys.js.map`
+  - 刪除：`api-server/src/shared/utils/logger_config.js`
+  - 刪除：`api-server/src/shared/utils/logger_config.py`
+  - 刪除：`api-server/src/shared/utils/logging.py`
+
+### 🧪 Phase 3 驗證結果
+- `uv run pytest tests/test_symbol_utils.py tests/test_signal_monitor.py tests/test_bitinfocharts_unit.py tests/test_farside_etf_collector_unit.py -q`（`collector-py/`）✅ 36 passed
+- `npm run build`（`api-server/`）✅
+
+### ✅ Fear & Greed 回補到 Technical（避免誤刪鏈路）
+- [x] **前端 API 回補**: `dashboard-ts/src/lib/api-client.ts`
+  - 恢復 `fetchFearGreed()`
+- [x] **型別回補**: `dashboard-ts/src/types/market.ts`
+  - 恢復 `FearGreedData`
+- [x] **Technical 頁整合情緒指標卡**: `dashboard-ts/src/app/technical/page.tsx`
+  - 於側欄新增 `Market Sentiment / Fear & Greed` 區塊
+  - 顯示數值、分類與時間戳，並依數值區間著色（fear→greed）
+
+### 🧪 Fear & Greed 回補驗證
+- `npm run build`（`dashboard-ts/`）✅
+- `npm run type-check`（`dashboard-ts/`）✅
+
+### ✅ Technical 高訊噪比壓縮（Sidebar Intel）
+- [x] **右側資訊整併為單一 Intel 卡**: `dashboard-ts/src/app/technical/page.tsx`
+  - 合併原本 `Quick Statistics` + `Market Sentiment`
+  - 保留高價值欄位：Price、RSI14、vs MA20、MACD Bias、Fear & Greed（值/分類/時間）
+  - 降低視覺層級與區塊數量，提升掃讀效率
+- [x] **Signal Timeline 高度壓縮**
+  - 由 `h-[400px]` 調整為 `h-[360px]`
+- [x] **移除已無引用組件**
+  - 刪除：`dashboard-ts/src/components/IndicatorStats.tsx`
+
+### 🧪 Technical 壓縮驗證
+- `npm run build`（`dashboard-ts/`）✅
+- `npm run type-check`（`dashboard-ts/`）✅
+
+### ✅ 互動降噪（Alerts Manager）
+- [x] **明確操作入口替代整塊 header 點擊**
+  - `dashboard-ts/src/components/AlertsManager.tsx`
+  - 移除「整個 header 可點」行為，改為右側明確按鈕：
+    - `Manage Alerts`（展開）
+    - `Hide Controls`（收合）
+  - 新增 `aria-expanded` / `aria-label` 提升可用性
+- [x] **收合狀態增加摘要資訊**
+  - 顯示目前 symbol active 數與全域 active 總數，使用者不展開也能判斷是否需要操作
+
+### 🧪 Alerts Manager 降噪驗證
+- `npm run build`（`dashboard-ts/`）✅
+- `npm run type-check`（`dashboard-ts/`）✅
+
+### ✅ 現有板塊強化（Technical）
+- [x] **Market Intel 強化判讀**
+  - `dashboard-ts/src/app/technical/page.tsx`
+  - 新增 `Regime`（Risk-On / Risk-Off / Mixed）綜合判讀
+  - 新增價格資料時間戳（Price TS）
+- [x] **Signals 板塊強化（可篩選 + 可掃描）**
+  - `dashboard-ts/src/components/SignalTimeline.tsx`
+  - 新增嚴重度計數（Critical/Warning/Info）
+  - 新增嚴重度篩選（ALL/CRITICAL/WARNING/INFO）
+  - 無資料時區分為「真的沒訊號」與「篩選後無結果」
+- [x] **Alerts 板塊強化（更快操作）**
+  - `dashboard-ts/src/components/AlertsManager.tsx`
+  - 新增 Quick Set（依 above/below 自動給 ±0.5% / ±1% / ±2%）
+  - 新增方向驗證（Above 必須 > 現價；Below 必須 < 現價）
+  - 即使按 Enter 送出，也會阻擋方向錯誤的目標價
+
+### 🧪 板塊強化驗證
+- `npm run build`（`dashboard-ts/`）✅
+- `npm run type-check`（`dashboard-ts/`）✅
+
+### ✅ Liquidity 板塊強化（Execution-focused）
+- [x] **補上已抓取但未展示的 Order Flow 面板**
+  - `dashboard-ts/src/app/liquidity/page.tsx`
+  - 接入 `OrderSizeChart`（`fetchOrderSizeAnalytics` 不再是隱性 dead query）
+- [x] **新增 Liquidity Intel 三指標**
+  - `Liquidity Regime`（BID SUPPORT / ASK PRESSURE / THIN BOOK / BALANCED）
+  - `Spread (bps)`（執行成本視角）
+  - `Bid/Ask Skew`（可視深度 notional 偏斜）
+- [x] **Orderbook 可操作性提升**
+  - 新增可切換深度檔位：`20 / 50 / 100`
+  - 底部狀態改為真實資訊：`AGE xs` + 更新時間（移除硬編碼 latency）
+  - loading 狀態補齊（bids/asks）
+
+### 🧪 Liquidity 強化驗證
+- `npm run build`（`dashboard-ts/`）✅
+- `npm run type-check`（`dashboard-ts/`）✅
+
+### ✅ ETF 板塊強化（Regime + Monitoring）
+- [x] **新增 ETF Regime 判讀卡**
+  - `dashboard-ts/src/app/etf/page.tsx`
+  - 輸出 `Broad Risk-On / Narrow Risk-On / Risk-Off / Mixed`
+  - 規則綜合 `latest flow`、`flow_zscore`、`issuer concentration`
+- [x] **新增 stale 明確警示**
+  - 當 `quality_status=stale` 時顯示 warning banner（含 stale 小時數）
+- [x] **新增 Flow Breadth 指標**
+  - 以最新交易日產品正流入占比（positive products / total）衡量市場廣度
+- [x] **新增 Issuer Concentration Trend 圖**
+  - 追蹤 `Top1`、`Top3` 集中度趨勢（%）
+- [x] **新增 Weekly Divergence Monitor**
+  - 顯示近 8 週 weekly divergence（按週排序）
+
+### 🧪 ETF 強化驗證
+- `npm run build`（`dashboard-ts/`）✅
+- `npm run type-check`（`dashboard-ts/`）✅
+
+### ✅ ETF 板塊優化與檢查（Correctness + Robustness）
+- [x] **顯示正確性修正**
+  - `dashboard-ts/src/app/etf/page.tsx`
+  - `formatCurrency(0)` 不再顯示 `N/A`，改為正常顯示 `$0.00`
+- [x] **時間序穩定性優化**
+  - 對 `analytics.data` 先做日期排序（desc），再派生 asc 供圖表使用，避免上游順序波動造成圖表誤讀
+- [x] **錯誤可見性提升**
+  - 任一 ETF query 失敗時顯示 `Partial data load failure` banner（避免靜默空白）
+- [x] **資料一致性檢查卡（Data Integrity Check）**
+  - 檢查並顯示：
+    - `Duplicate Dates`
+    - `Missing BTC Close`
+    - `Cumulative Drift`（累計流向一致性）
+- [x] **週背離資料排序優化**
+  - `weekly_divergence` 先排序再截取近 8 週，避免順序不一致
+
+### 🧪 ETF 優化與檢查驗證
+- `npm run build`（`dashboard-ts/`）✅
+- `npm run type-check`（`dashboard-ts/`）✅
+
+### ✅ ETF 停更診斷與修復（2026-02-17）
+- [x] **現象確認**
+  - DB 最新 ETF 交易日：`2026-02-13 (ET)`（`global_indicators`）
+  - 檢查時間：`2026-02-16 23:39:56 EST`
+- [x] **根因定位**
+  - 連續非交易日窗口（週末 + 2026-02-16 美股休市）導致無新日資料屬正常情況
+  - 同時發現嘗試次數邏輯 bug：`run_etf_flows_task` 在「達上限 skip」時仍寫 `ETF_FLOWS_FETCH`，會把計數從 `3/3` 持續推到 `4/3`、`5/3`，增加交易日誤跳過風險
+- [x] **程式修補**
+  - 檔案：`collector-py/src/tasks/external_tasks.py`
+  - 僅在「實際對來源發起抓取」時寫 `ETF_FLOWS_FETCH`，並加上 `metadata.attempted_fetch=true`
+  - 嘗試次數查詢只計 `attempted_fetch=true`
+  - skip 事件改寫 `ETF_FLOWS_SKIP_LIMIT`，不再污染 fetch 次數
+- [x] **套用**
+  - 已重啟 `collector` 容器使修補生效
+
+### ✅ Technical 圖表時間軸對齊修復（K 線 / MACD / OI）
+- [x] **主圖驅動同步機制補強**
+  - `dashboard-ts/src/app/technical/page.tsx`
+  - 新增 `syncAllChartsFromMain()`，以主圖可視範圍強制對齊子圖
+  - 在圖表建立後與關鍵資料/參數變更後主動同步，避免初始載入錯位
+- [x] **移除 MACD 子圖自帶時間縮放**
+  - `dashboard-ts/src/components/charts/MACDChart.tsx`
+  - 移除 `setVisibleLogicalRange` 首次載入邏輯，改由 Technical 主圖統一控軸
+
+### 🧪 Technical 對齊修復驗證
+- `npm run build`（`dashboard-ts/`）✅
+- `npm run type-check`（`dashboard-ts/`）✅
+
 # Session Log - 2026-02-13
 
 ## 🎯 當前進度

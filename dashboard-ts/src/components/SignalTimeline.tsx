@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { format } from 'date-fns';
 import { fetchSignals, MarketSignal } from '@/lib/api-client';
 
@@ -13,6 +13,7 @@ export const SignalTimeline: React.FC<SignalTimelineProps> = ({ symbol, limit = 
   const [signals, setSignals] = useState<MarketSignal[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastSignalTime, setLastSignalTime] = useState<number>(0);
+  const [severityFilter, setSeverityFilter] = useState<'all' | 'critical' | 'warning' | 'info'>('all');
 
   // ✅ 使用 AudioContext 產生電子通知音 (避免外部資源依賴)
   const playAlertSound = (severity: string) => {
@@ -98,14 +99,32 @@ export const SignalTimeline: React.FC<SignalTimelineProps> = ({ symbol, limit = 
     }
   };
 
+  const severityCounts = useMemo(() => {
+    const counts = { critical: 0, warning: 0, info: 0 };
+    for (const signal of signals) {
+      if (signal.severity === 'critical') counts.critical += 1;
+      else if (signal.severity === 'warning') counts.warning += 1;
+      else counts.info += 1;
+    }
+    return counts;
+  }, [signals]);
+
+  const filteredSignals = useMemo(() => {
+    if (severityFilter === 'all') return signals;
+    if (severityFilter === 'info') {
+      return signals.filter((signal) => signal.severity !== 'critical' && signal.severity !== 'warning');
+    }
+    return signals.filter((signal) => signal.severity === severityFilter);
+  }, [signals, severityFilter]);
+
   if (loading && signals.length === 0) {
     return <div className="p-4 text-gray-500">Loading signals...</div>;
   }
 
   return (
-    <div className="bg-gray-900 rounded-xl border border-gray-800 h-full flex flex-col">
-      <div className="p-4 border-b border-gray-800 flex justify-between items-center">
-        <h3 className="font-bold text-gray-100 flex items-center gap-2">
+    <div className="card h-full flex flex-col overflow-hidden border border-gray-800 rounded-xl">
+      <div className="px-4 py-3 border-b border-gray-800/90 flex justify-between items-center">
+        <h3 className="text-[11px] font-bold tracking-wide text-gray-100 flex items-center gap-2 uppercase">
           <span className="relative flex h-2 w-2">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
             <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
@@ -114,18 +133,43 @@ export const SignalTimeline: React.FC<SignalTimelineProps> = ({ symbol, limit = 
         </h3>
         <button 
           onClick={loadSignals}
-          className="text-xs text-gray-400 hover:text-white transition-colors"
+          className="text-[11px] font-medium text-gray-400 hover:text-white transition-colors"
         >
           Refresh
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar">
-        {signals.length === 0 ? (
-          <div className="text-center py-10 text-gray-600 italic text-xs">No signals detected recently</div>
+      <div className="px-4 py-3 border-b border-gray-800/70 flex flex-col gap-2">
+        <div className="flex flex-wrap items-center gap-2 text-[10px]">
+          <span className="px-2 py-0.5 rounded border border-red-500/30 text-red-400">Critical {severityCounts.critical}</span>
+          <span className="px-2 py-0.5 rounded border border-amber-500/30 text-amber-400">Warning {severityCounts.warning}</span>
+          <span className="px-2 py-0.5 rounded border border-blue-500/30 text-blue-400">Info {severityCounts.info}</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-1">
+          {(['all', 'critical', 'warning', 'info'] as const).map((key) => (
+            <button
+              key={key}
+              onClick={() => setSeverityFilter(key)}
+              className={`px-2 py-0.5 text-[10px] rounded border transition-colors ${
+                severityFilter === key
+                  ? 'border-gray-600 bg-gray-700/70 text-gray-100'
+                  : 'border-gray-800 text-gray-500 hover:text-gray-300'
+              }`}
+            >
+              {key.toUpperCase()}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2 custom-scrollbar">
+        {filteredSignals.length === 0 ? (
+          <div className="text-center py-10 text-gray-600 italic text-xs">
+            {signals.length === 0 ? 'No signals detected recently' : 'No signals matched current filter'}
+          </div>
         ) : (
-          signals.map((signal, idx) => (
-            <div key={idx} className="relative pl-4 border-l border-gray-800 pb-1 group">
+          filteredSignals.map((signal, idx) => (
+            <div key={idx} className="relative pl-4 pr-1 border-l border-gray-800 pb-1 group">
               {/* Dot */}
               <div className={`absolute -left-[4px] top-1.5 w-1.5 h-1.5 rounded-full ${
                 signal.side === 'bullish' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 
@@ -143,7 +187,7 @@ export const SignalTimeline: React.FC<SignalTimelineProps> = ({ symbol, limit = 
                   </div>
                 </div>
                 
-                <div className="text-gray-300 text-[10px] leading-tight mb-1">
+                <div className="text-gray-300 text-[10px] leading-tight mb-1 break-words">
                   <span className="text-blue-300 font-bold mr-1">#{signal.symbol}</span>
                   {signal.message}
                 </div>

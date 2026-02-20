@@ -9,6 +9,7 @@ import {
   type IChartApi,
   type ISeriesApi,
   type UTCTimestamp,
+  type Time,
   type LineData,
   type HistogramData
 } from 'lightweight-charts'
@@ -17,10 +18,30 @@ import type { OHLCVWithIndicators } from '@/types/market'
 interface Props {
   data: OHLCVWithIndicators[]
   onChartCreate?: (chart: IChartApi) => void
+  timeframe?: string
   key?: string // 用於識別參數變化，觸發重新首次載入
 }
 
-export function MACDChart({ data, onChartCreate, key }: Props) {
+const formatTickLabel = (time: Time, timeframe: string) => {
+  const timestampMs = typeof time === 'number'
+    ? time * 1000
+    : (typeof time === 'string'
+      ? Date.parse(time)
+      : new Date(time.year, time.month - 1, time.day).getTime())
+
+  const date = new Date(timestampMs)
+  if (Number.isNaN(date.getTime())) return ''
+
+  if (timeframe === '1d') {
+    return date.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit' })
+  }
+  if (timeframe === '4h' || timeframe === '1h') {
+    return date.toLocaleString('en-US', { month: '2-digit', day: '2-digit', hour: '2-digit', hour12: false })
+  }
+  return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
+export function MACDChart({ data, onChartCreate, timeframe = '1h', key }: Props) {
   const chartContainerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const macdSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
@@ -52,6 +73,8 @@ export function MACDChart({ data, onChartCreate, key }: Props) {
       timeScale: {
         borderColor: '#374151',
         timeVisible: true,
+        secondsVisible: false,
+        tickMarkFormatter: (time: Time) => formatTickLabel(time, timeframe),
       },
     })
 
@@ -96,7 +119,7 @@ export function MACDChart({ data, onChartCreate, key }: Props) {
       macdSeriesRef.current = null
       signalSeriesRef.current = null
     }
-  }, [])
+  }, [timeframe])
 
   useEffect(() => {
     const macdSeries = macdSeriesRef.current;
@@ -128,14 +151,8 @@ export function MACDChart({ data, onChartCreate, key }: Props) {
     signalSeries.setData(signalData)
     histSeries.setData(histData)
 
-    // ✅ 僅在首次載入時自動調整範圍，顯示最新 120 根 K 線
-    if (isFirstLoadRef.current && chartRef.current && macdData.length > 0) {
-      const barCount = Math.min(120, macdData.length)
-      const from = Math.max(0, macdData.length - barCount)
-      chartRef.current.timeScale().setVisibleLogicalRange({
-        from: from,
-        to: macdData.length - 1
-      })
+    // 交由 Technical 頁主圖統一控制時間軸，避免子圖自行縮放造成錯位
+    if (isFirstLoadRef.current) {
       isFirstLoadRef.current = false
     }
   }, [data])

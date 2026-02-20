@@ -41,30 +41,6 @@ export interface Market {
   created_at: string
 }
 
-export interface MarketPrice {
-  exchange: string
-  symbol: string
-  price: number
-  change_24h: number
-  volume_24h: number
-  high_24h?: number
-  low_24h?: number
-  funding_rate?: number
-}
-
-export interface MarketSummary {
-  latest_price: number
-  change_24h: number
-  volume_24h: number
-  high_24h: number
-  low_24h: number
-  macd: number | null
-  macd_signal: number | null
-  ma_20: number | null
-  ma_60: number | null
-  rsi_14: number | null
-}
-
 // Derivatives Data Types
 export interface FundingRate {
   timestamp: string
@@ -134,11 +110,13 @@ export interface WSPriceData {
 
 export interface RichListStat {
   snapshot_date: string
+  timestamp?: string
   rank_group: string
+  tier_name?: string
   address_count: number
   total_balance: number
-  total_balance_usd: number
-  percentage_of_supply: number
+  total_balance_usd?: number | null
+  percentage_of_supply?: number | null
 }
 
 export interface Alert {
@@ -166,54 +144,12 @@ export interface DataQualityMetrics {
   backfill_task_created: boolean
 }
 
-// Events Types
-export interface Event {
-  id: number
-  source: 'coinmarketcal' | 'federal_reserve' | string
-  event_type: string
-  title: string
-  description?: string
-  event_date: string
-  country?: string
-  impact: 'high' | 'medium' | 'low'
-  actual?: string
-  forecast?: string
-  previous?: string
-  coins?: string[]
-  url?: string
-  metadata?: EventMetadata
-}
-
-export interface EventMetadata {
-  volatility?: string
-  proof?: string
-  categories?: string[]
-  [key: string]: unknown
-}
-
-export interface EventsByDate {
-  [date: string]: Event[]
-}
-
-export interface UpcomingEventsResponse {
-  total: number
-  days: number
-  eventsByDate: EventsByDate
-}
-
 // Macro & Sentiment Types
 export interface FearGreedData {
   timestamp: string
   value: number
   classification: string
   description: string
-}
-
-export interface ETFFlowSummary {
-  date: string
-  total_net_flow_usd: number
-  cumulative_flow_usd: number
-  product_count: number
 }
 
 export interface ETFProduct {

@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest'
-import { calculateSMA, calculateRSI } from '../indicators'
+import { calculateSMA, calculateRSI, calculateFractals } from '../indicators'
 
 describe('Technical Indicators', () => {
   test('calculateSMA returns correct moving average', () => {
@@ -49,5 +49,16 @@ describe('Technical Indicators', () => {
     
     expect(val).not.toBeNull()
     expect(val).toBeCloseTo(66.67, 1)
+  })
+
+  test('calculateFractals finds classic up/down patterns', () => {
+    const highs = [10, 12, 16, 13, 11, 12, 14, 13, 12]
+    const lows = [8, 7, 6, 7, 8, 7, 5, 7, 8]
+    const fractals = calculateFractals(highs, lows)
+
+    expect(fractals.up[2]).toBe(true)
+    expect(fractals.down[6]).toBe(true)
+    expect(fractals.up[0]).toBe(false)
+    expect(fractals.down[8]).toBe(false)
   })
 })

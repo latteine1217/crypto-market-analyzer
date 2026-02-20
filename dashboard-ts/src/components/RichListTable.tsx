@@ -50,11 +50,17 @@ export function RichListTable({ data }: Props) {
       return range.min === tier.min && range.max === tier.max
     }
 
+    const getSnapshotDate = (d: RichListStat & { timestamp?: string }) =>
+      d.snapshot_date || d.timestamp || ''
+    const getRankGroup = (d: RichListStat & { tier_name?: string }) =>
+      d.rank_group || d.tier_name || ''
+
     // 1. 按日期分組（使用 UTC 日期，避免時區導致重複）
     const groupedByDate: Record<string, RichListStat[]> = {}
     sourceData.forEach(d => {
-      if (!d || !d.snapshot_date) return
-      const dateStr = new Date(d.snapshot_date).toISOString().split('T')[0]
+      const snapshotDate = getSnapshotDate(d as RichListStat & { timestamp?: string })
+      if (!d || !snapshotDate) return
+      const dateStr = new Date(snapshotDate).toISOString().split('T')[0]
       if (!groupedByDate[dateStr]) groupedByDate[dateStr] = []
       groupedByDate[dateStr].push(d)
     })
@@ -78,14 +84,14 @@ export function RichListTable({ data }: Props) {
         // 去重：同一天同一 range 只取最新一筆
         const latestByRange = new Map<string, RichListStat>()
         dayStats.forEach(stat => {
-          const key = stat.rank_group || ''
+          const key = getRankGroup(stat as RichListStat & { tier_name?: string })
           const existing = latestByRange.get(key)
           if (!existing) {
             latestByRange.set(key, stat)
             return
           }
-          const existingTime = new Date(existing.snapshot_date).getTime()
-          const currentTime = new Date(stat.snapshot_date).getTime()
+          const existingTime = new Date(getSnapshotDate(existing as RichListStat & { timestamp?: string })).getTime()
+          const currentTime = new Date(getSnapshotDate(stat as RichListStat & { timestamp?: string })).getTime()
           if (currentTime > existingTime) {
             latestByRange.set(key, stat)
           }
@@ -95,14 +101,14 @@ export function RichListTable({ data }: Props) {
 
         // 若存在精確區間，直接使用（避免重複加總子區間）
         const exactRow = normalizedStats.find(stat => {
-          const range = parseRange(stat.rank_group || '')
+          const range = parseRange(getRankGroup(stat as RichListStat & { tier_name?: string }))
           return range ? isExactTier(range, tier) : false
         })
         if (exactRow) return Number(exactRow.total_balance)
 
         // 否則聚合子區間（完全落在該 tier 範圍內）
         const total = normalizedStats.reduce((sum, stat) => {
-          const range = parseRange(stat.rank_group || '')
+          const range = parseRange(getRankGroup(stat as RichListStat & { tier_name?: string }))
           if (!range) return sum
           const within = range.min >= tier.min && (tier.max === Infinity || range.max <= tier.max)
           if (within) return sum + Number(stat.total_balance)

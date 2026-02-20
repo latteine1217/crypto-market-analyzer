@@ -8,9 +8,13 @@ export const getRichListStats = async (symbol: string, days: number = 30) => {
   const result = await query(`
     SELECT 
       time as timestamp,
+      time as snapshot_date,
       tier_name,
+      tier_name as rank_group,
       address_count,
-      total_balance
+      total_balance,
+      NULL::numeric as total_balance_usd,
+      NULL::numeric as percentage_of_supply
     FROM address_tier_snapshots s
     JOIN blockchains b ON s.blockchain_id = b.id
     WHERE b.name = $1

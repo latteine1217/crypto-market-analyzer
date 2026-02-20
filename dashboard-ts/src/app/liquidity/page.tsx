@@ -15,6 +15,7 @@ import { QUERY_PROFILES } from '@/lib/queryProfiles'
 export default function LiquidityPage() {
   const [exchange, setExchange] = useState('bybit')
   const [symbol, setSymbol] = useState('BTCUSDT')
+  const orderbookLevels = 100
 
   const { data: markets } = useQuery({
     queryKey: ['markets'],
@@ -76,13 +77,45 @@ export default function LiquidityPage() {
     stats ? ((stats.spread / stats.bestAsk) * 100).toFixed(4) : '0'
   , [stats])
 
+  const spreadBps = useMemo(() =>
+    stats && stats.bestAsk > 0 ? (stats.spread / stats.bestAsk) * 10000 : 0
+  , [stats])
+
+  const liquiditySkewPct = useMemo(() => {
+    if (!stats) return 0
+    const total = stats.totalBidsUsd + stats.totalAsksUsd
+    if (total <= 0) return 0
+    return ((stats.totalBidsUsd - stats.totalAsksUsd) / total) * 100
+  }, [stats])
+
+  const liquidityRegime = useMemo(() => {
+    if (!stats) return { label: 'NO DATA', tone: 'text-gray-400 border-gray-700' }
+
+    if (spreadBps <= 2 && latestOBI > 0.25 && liquiditySkewPct > 8) {
+      return { label: 'BID SUPPORT', tone: 'text-green-400 border-green-500/30' }
+    }
+    if (spreadBps <= 2 && latestOBI < -0.25 && liquiditySkewPct < -8) {
+      return { label: 'ASK PRESSURE', tone: 'text-red-400 border-red-500/30' }
+    }
+    if (spreadBps > 6) {
+      return { label: 'THIN BOOK', tone: 'text-amber-400 border-amber-500/30' }
+    }
+    return { label: 'BALANCED', tone: 'text-blue-400 border-blue-500/30' }
+  }, [stats, spreadBps, latestOBI, liquiditySkewPct])
+
+  const orderbookAgeSec = useMemo(() => {
+    if (!orderbook?.timestamp) return null
+    const ts = new Date(orderbook.timestamp).getTime()
+    if (Number.isNaN(ts)) return null
+    return Math.max(0, (Date.now() - ts) / 1000)
+  }, [orderbook?.timestamp])
+
   // 計算累積量（用於視覺化）
   const processedData = useMemo(() => {
     if (!orderbook) return { bids: [], asks: [], maxCumulative: 0 }
     
-    // 提升展示深度至 50 檔
-    const topBids = orderbook.bids?.slice(0, 100) || []
-    const topAsks = orderbook.asks?.slice(0, 100) || []
+    const topBids = orderbook.bids?.slice(0, orderbookLevels) || []
+    const topAsks = orderbook.asks?.slice(0, orderbookLevels) || []
     const bidsWithCumulative: Array<OrderBookLevel & { cumulative: number }> = []
     const asksWithCumulative: Array<OrderBookLevel & { cumulative: number }> = []
 
@@ -106,7 +139,7 @@ export default function LiquidityPage() {
     )
 
     return { bids: bidsWithCumulative, asks: asksWithCumulative, maxCumulative }
-  }, [orderbook])
+  }, [orderbook, orderbookLevels])
 
   const { bids: bidsWithCumulative, asks: asksWithCumulative, maxCumulative } = processedData
 
@@ -193,18 +226,51 @@ export default function LiquidityPage() {
         </div>
       )}
 
+      {stats && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className={`card p-4 border ${liquidityRegime.tone}`}>
+            <div className="text-[10px] text-gray-500 uppercase tracking-widest mb-1">Liquidity Regime</div>
+            <div className={`text-lg font-black ${liquidityRegime.tone.split(' ')[0]}`}>{liquidityRegime.label}</div>
+            <div className="text-[11px] text-gray-500 mt-1">基於 spread、OBI 與 bid/ask notional skew</div>
+          </div>
+          <div className="card p-4">
+            <div className="text-[10px] text-gray-500 uppercase tracking-widest mb-1">Spread (bps)</div>
+            <div className={clsx(
+              "text-lg font-black",
+              spreadBps <= 2 ? "text-green-400" : spreadBps > 6 ? "text-amber-400" : "text-gray-200"
+            )}>
+              {spreadBps.toFixed(2)} bps
+            </div>
+            <div className="text-[11px] text-gray-500 mt-1">{spreadBps <= 2 ? 'Tight execution window' : 'Slippage risk rising'}</div>
+          </div>
+          <div className="card p-4">
+            <div className="text-[10px] text-gray-500 uppercase tracking-widest mb-1">Bid/Ask Skew</div>
+            <div className={clsx(
+              "text-lg font-black",
+              liquiditySkewPct > 0 ? "text-green-400" : liquiditySkewPct < 0 ? "text-red-400" : "text-gray-200"
+            )}>
+              {liquiditySkewPct > 0 ? '+' : ''}{liquiditySkewPct.toFixed(1)}%
+            </div>
+            <div className="text-[11px] text-gray-500 mt-1">Notional imbalance across visible book</div>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         <div className="xl:col-span-2 space-y-6">
           <div className="card h-[450px]">
             <DepthChart orderbook={orderbook!} />
           </div>
           
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="space-y-6">
             <div className="h-[380px]">
               <CVDChart exchange={exchange} symbol={symbol} />
             </div>
             <div className="h-[380px]">
               <OBIChart exchange={exchange} symbol={symbol} />
+            </div>
+            <div className="h-[380px]">
+              <OrderSizeChart data={orderSizeData || []} symbol={symbol} />
             </div>
           </div>
         </div>
@@ -229,6 +295,9 @@ export default function LiquidityPage() {
                   <span>Size</span>
                 </div>
                 <div className="flex-1 overflow-y-auto custom-scrollbar space-y-0.5">
+                  {isLoading && bidsWithCumulative.length === 0 && (
+                    <div className="text-[10px] text-gray-500 p-2">Loading bids...</div>
+                  )}
                   {bidsWithCumulative.map((bid, i) => (
                     <div key={i} className="relative group h-6">
                       <div className="absolute inset-y-0 right-0 bg-green-500/10 group-hover:bg-green-500/20 transition-colors" style={{ width: `${(bid.cumulative / maxCumulative) * 100}%` }} />
@@ -247,6 +316,9 @@ export default function LiquidityPage() {
                   <span>Size</span>
                 </div>
                 <div className="flex-1 overflow-y-auto custom-scrollbar space-y-0.5">
+                  {isLoading && asksWithCumulative.length === 0 && (
+                    <div className="text-[10px] text-gray-500 p-2">Loading asks...</div>
+                  )}
                   {asksWithCumulative.map((ask, i) => (
                     <div key={i} className="relative group h-6">
                       <div className="absolute inset-y-0 left-0 bg-red-500/10 group-hover:bg-red-500/20 transition-colors" style={{ width: `${(ask.cumulative / maxCumulative) * 100}%` }} />
@@ -261,8 +333,10 @@ export default function LiquidityPage() {
             </div>
             
             <div className="mt-4 pt-3 border-t border-gray-800 flex justify-between items-center text-[10px] text-gray-500 font-mono">
-               <span>LATENCY: 45ms</span>
-               <span>{orderbook?.timestamp ? new Date(orderbook.timestamp).toLocaleTimeString() : '--:--:--'}</span>
+               <span>DEPTH: TOP {orderbookLevels}</span>
+               <span>
+                 {orderbookAgeSec === null ? '--' : `AGE ${orderbookAgeSec.toFixed(1)}s`} • {orderbook?.timestamp ? new Date(orderbook.timestamp).toLocaleTimeString() : '--:--:--'}
+               </span>
             </div>
           </div>
         </div>

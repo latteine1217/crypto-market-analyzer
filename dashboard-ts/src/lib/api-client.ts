@@ -1,8 +1,6 @@
 import axios from 'axios';
 import type { 
   Market, 
-  MarketPrice, 
-  MarketSummary, 
   OHLCVData, 
   OrderBookSnapshot,
   FundingRate,
@@ -10,10 +8,7 @@ import type {
   RichListStat,
   Alert,
   DataQualityMetrics,
-  Event,
-  UpcomingEventsResponse,
   FearGreedData,
-  ETFFlowSummary,
   ETFProduct,
   ETFIssuer,
   ETFFlowAnalyticsResponse
@@ -86,11 +81,6 @@ export const fetchMarkets = async (): Promise<Market[]> => {
   return response.data.data;
 };
 
-export const fetchMarketPrices = async (): Promise<MarketPrice[]> => {
-  const response = await apiClient.get<{ data: MarketPrice[] }>('/markets/prices');
-  return response.data.data;
-};
-
 export const fetchMarketQuality = async (): Promise<DataQualityMetrics[]> => {
   const response = await apiClient.get<{ data: DataQualityMetrics[] }>('/markets/quality');
   return response.data.data;
@@ -149,26 +139,7 @@ export const fetchOHLCV = async (
   return response.data.data;
 };
 
-export const fetchMarketSummary = async (
-  exchange: string,
-  symbol: string
-): Promise<MarketSummary> => {
-  const response = await apiClient.get<{ data: MarketSummary }>(`/ohlcv/${exchange}/${symbol}/summary`);
-  return response.data.data;
-};
-
 // Orderbook API
-export const fetchOrderbook = async (
-  exchange: string,
-  symbol: string,
-  limit: number = 100
-): Promise<OrderBookSnapshot[]> => {
-  const response = await apiClient.get<{ data: OrderBookSnapshot[] }>(
-    `/orderbook/${exchange}/${symbol}?limit=${limit}`
-  );
-  return response.data.data;
-};
-
 export const fetchLatestOrderbook = async (
   exchange: string,
   symbol: string
@@ -208,16 +179,6 @@ export const fetchFundingRate = async (
   return response.data.data;
 };
 
-export const fetchLatestFundingRate = async (
-  exchange: string,
-  symbol: string
-): Promise<FundingRate | null> => {
-  const response = await apiClient.get<{ data: FundingRate | null }>(
-    `/derivatives/${exchange}/${symbol}/funding-rate/latest`
-  );
-  return response.data.data;
-};
-
 export const fetchOpenInterest = async (
   exchange: string,
   symbol: string,
@@ -225,16 +186,6 @@ export const fetchOpenInterest = async (
 ): Promise<OpenInterest[]> => {
   const response = await apiClient.get<{ data: OpenInterest[] }>(
     `/derivatives/${exchange}/${symbol}/open-interest?limit=${limit}`
-  );
-  return response.data.data;
-};
-
-export const fetchLatestOpenInterest = async (
-  exchange: string,
-  symbol: string
-): Promise<OpenInterest | null> => {
-  const response = await apiClient.get<{ data: OpenInterest | null }>(
-    `/derivatives/${exchange}/${symbol}/open-interest/latest`
   );
   return response.data.data;
 };
@@ -283,13 +234,6 @@ export const fetchFearGreed = async (): Promise<FearGreedData | null> => {
 };
 
 // ETF API
-export const fetchETFSummary = async (asset: string, days: number): Promise<ETFFlowSummary[]> => {
-  const response = await apiClient.get<{ data: ETFFlowSummary[] }>('/etf-flows/summary', {
-    params: { asset, days }
-  });
-  return response.data.data;
-};
-
 export const fetchETFProducts = async (asset: string, days: number): Promise<ETFProduct[]> => {
   const response = await apiClient.get<{ data: ETFProduct[] }>('/etf-flows/products', {
     params: { asset, days }
@@ -348,18 +292,5 @@ export const fetchSignals = async (
   const response = await apiClient.get<{ data: MarketSignal[] }>('/alerts/signals', {
     params: { symbol, limit }
   });
-  return response.data.data;
-};
-
-// Events API
-export const fetchUpcomingEvents = async (days: number = 7, source?: string, impact?: string): Promise<UpcomingEventsResponse> => {
-  const response = await apiClient.get<{ data: UpcomingEventsResponse }>('/events/upcoming', {
-    params: { days, source, impact }
-  });
-  return response.data.data;
-};
-
-export const fetchTodayEvents = async (): Promise<{ date: string; count: number; events: Event[] }> => {
-  const response = await apiClient.get<{ data: { date: string; count: number; events: Event[] } }>('/events/today');
   return response.data.data;
 };

@@ -43,7 +43,7 @@ export function AlertsManager({ currentSymbol, currentPrice }: Props) {
 
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!targetPrice || isNaN(Number(targetPrice))) return
+    if (!targetPrice || isNaN(Number(targetPrice)) || violatesDirection) return
     
     createMutation.mutate({
       symbol: currentSymbol,
@@ -54,17 +54,42 @@ export function AlertsManager({ currentSymbol, currentPrice }: Props) {
 
   const symbolAlerts = alerts?.filter(a => a.symbol === currentSymbol) || []
   const otherAlerts = alerts?.filter(a => a.symbol !== currentSymbol) || []
+  const activeCount = alerts?.filter(a => a.is_active).length || 0
+  const parsedTarget = Number(targetPrice)
+  const hasTarget = targetPrice.trim() !== '' && !Number.isNaN(parsedTarget)
+  const violatesDirection = currentPrice !== undefined && hasTarget
+    ? (condition === 'above' ? parsedTarget <= currentPrice : parsedTarget >= currentPrice)
+    : false
+  const canSubmit = hasTarget && !createMutation.isPending && !violatesDirection
+
+  const setPresetTarget = (ratio: number) => {
+    if (!currentPrice) return
+    const value = currentPrice * ratio
+    const decimals = currentPrice >= 1000 ? 2 : currentPrice >= 1 ? 4 : 8
+    setTargetPrice(value.toFixed(decimals))
+  }
 
   return (
-    <div className="card">
-      <div className="card-header flex justify-between items-center cursor-pointer" onClick={() => setIsExpanded(!isExpanded)}>
-        <h2 className="font-semibold">Price Alerts</h2>
-        <span className="text-sm text-gray-400">
-          {symbolAlerts.filter(a => a.is_active).length} Active
-        </span>
+    <div className="card overflow-hidden border border-gray-800 rounded-xl">
+      <div className="px-4 py-3 border-b border-gray-800/90 flex justify-between items-start gap-3">
+        <div>
+          <h2 className="text-[11px] font-bold tracking-wide uppercase text-gray-100">Price Alerts</h2>
+          <p className="text-[11px] text-gray-500 mt-1 break-words pr-2">
+            {currentSymbol}: {symbolAlerts.filter(a => a.is_active).length} active, total {activeCount} active
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setIsExpanded((prev) => !prev)}
+          className="shrink-0 px-3 py-1.5 text-[11px] font-semibold rounded border border-gray-700 bg-gray-800/70 text-gray-200 hover:bg-gray-700/70 transition-colors"
+          aria-expanded={isExpanded}
+          aria-label={isExpanded ? 'Collapse alerts manager' : 'Expand alerts manager'}
+        >
+          {isExpanded ? 'Hide Controls' : 'Manage Alerts'}
+        </button>
       </div>
 
-      <div className={`p-4 ${isExpanded ? '' : 'hidden'}`}>
+      <div className={`px-4 py-4 ${isExpanded ? '' : 'hidden'}`}>
         {/* Create Form */}
         <form onSubmit={handleCreate} className="mb-6 space-y-3">
           <div className="flex gap-2 items-center">
@@ -90,12 +115,45 @@ export function AlertsManager({ currentSymbol, currentPrice }: Props) {
             />
             <button 
               type="submit" 
-              disabled={createMutation.isPending}
+              disabled={!canSubmit}
               className="btn-primary px-4 py-1.5 text-sm whitespace-nowrap"
             >
               {createMutation.isPending ? 'Adding...' : 'Add Alert'}
             </button>
           </div>
+
+          {currentPrice && (
+            <div className="flex flex-wrap gap-2">
+              <span className="text-[11px] text-gray-500 self-center">Quick Set:</span>
+              {(condition === 'above'
+                ? [
+                    { label: '+0.5%', ratio: 1.005 },
+                    { label: '+1%', ratio: 1.01 },
+                    { label: '+2%', ratio: 1.02 }
+                  ]
+                : [
+                    { label: '-0.5%', ratio: 0.995 },
+                    { label: '-1%', ratio: 0.99 },
+                    { label: '-2%', ratio: 0.98 }
+                  ]
+              ).map((preset) => (
+                <button
+                  key={preset.label}
+                  type="button"
+                  onClick={() => setPresetTarget(preset.ratio)}
+                  className="px-2 py-1 text-[11px] rounded border border-gray-700 text-gray-300 hover:bg-gray-800 transition-colors"
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {violatesDirection && (
+            <p className="text-[11px] text-amber-400">
+              目標價方向不一致：{condition === 'above' ? 'Above 必須大於當前價格' : 'Below 必須小於當前價格'}。
+            </p>
+          )}
         </form>
 
         {/* Alerts List */}

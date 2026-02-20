@@ -29,26 +29,25 @@ export default function EtfPage() {
   const [timeframe, setTimeframe] = React.useState(30);
   const [compareProduct, setCompareProduct] = React.useState<'IBIT' | 'FBTC' | 'GBTC'>('IBIT');
 
-  const { data: analytics, isLoading: analyticsLoading } = useQuery({
+  const { data: analytics, isLoading: analyticsLoading, error: analyticsError } = useQuery({
     queryKey: ['etfAnalytics', asset, timeframe],
     queryFn: () => fetchETFAnalytics(asset, timeframe),
     ...QUERY_PROFILES.tenMinutes,
   });
 
-  const { data: products, isLoading: productsLoading } = useQuery({
+  const { data: products, isLoading: productsLoading, error: productsError } = useQuery({
     queryKey: ['etfProducts', asset, timeframe],
     queryFn: () => fetchETFProducts(asset, timeframe),
     ...QUERY_PROFILES.tenMinutes,
   });
 
-  const { data: topIssuers, isLoading: issuersLoading } = useQuery({
+  const { data: topIssuers, isLoading: issuersLoading, error: issuersError } = useQuery({
     queryKey: ['topIssuers', asset, timeframe],
     queryFn: () => fetchTopIssuers(asset, timeframe),
     ...QUERY_PROFILES.tenMinutes,
   });
 
   const formatCurrency = (value: number) => {
-    if (value === 0) return 'N/A';
     const absValue = Math.abs(value);
     if (absValue >= 1e9) return `$${(value / 1e9).toFixed(2)}B`;
     if (absValue >= 1e6) return `$${(value / 1e6).toFixed(2)}M`;
@@ -71,39 +70,42 @@ export default function EtfPage() {
     return `${value.toFixed(2)} BTC`;
   };
 
-  const summaryRows = analytics?.data || [];
   const summaryRowsDesc = React.useMemo(() => {
-    return summaryRows.length > 0 ? [...summaryRows].reverse() : [];
-  }, [summaryRows]);
-  const latestFlow = summaryRows[0]?.total_net_flow_usd || 0;
-  const totalFlow = summaryRows.reduce((sum, item) => sum + item.total_net_flow_usd, 0);
-  const avgFlow = summaryRows.length > 0 ? totalFlow / summaryRows.length : 0;
-  const productCount = summaryRows[0]?.product_count || 0;
-  const latestRow = summaryRows[0];
+    const rows = analytics?.data || [];
+    return [...rows].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }, [analytics?.data]);
+  const summaryRowsAsc = React.useMemo(() => {
+    return [...summaryRowsDesc].reverse();
+  }, [summaryRowsDesc]);
+  const latestFlow = summaryRowsDesc[0]?.total_net_flow_usd || 0;
+  const totalFlow = summaryRowsDesc.reduce((sum, item) => sum + item.total_net_flow_usd, 0);
+  const avgFlow = summaryRowsDesc.length > 0 ? totalFlow / summaryRowsDesc.length : 0;
+  const productCount = summaryRowsDesc[0]?.product_count || 0;
+  const latestRow = summaryRowsDesc[0];
 
   const flowStreak = React.useMemo<FlowStreak>(() => {
-    if (!summaryRows.length) return { count: 0, direction: 'neutral' };
+    if (!summaryRowsDesc.length) return { count: 0, direction: 'neutral' };
     const sign = latestFlow > 0 ? 1 : latestFlow < 0 ? -1 : 0;
     if (sign === 0) return { count: 0, direction: 'neutral' };
     let count = 0;
-    for (const item of summaryRows) {
+    for (const item of summaryRowsDesc) {
       const s = item.total_net_flow_usd > 0 ? 1 : item.total_net_flow_usd < 0 ? -1 : 0;
       if (s !== sign) break;
       count += 1;
     }
     return { count, direction: sign > 0 ? 'inflow' : 'outflow' };
-  }, [summaryRows, latestFlow]);
+  }, [summaryRowsDesc, latestFlow]);
 
   const { largestInflow, largestOutflow } = React.useMemo(() => {
-    if (!summaryRows.length) return { largestInflow: null, largestOutflow: null };
-    let max = summaryRows[0];
-    let min = summaryRows[0];
-    for (const item of summaryRows) {
+    if (!summaryRowsDesc.length) return { largestInflow: null, largestOutflow: null };
+    let max = summaryRowsDesc[0];
+    let min = summaryRowsDesc[0];
+    for (const item of summaryRowsDesc) {
       if (item.total_net_flow_usd > max.total_net_flow_usd) max = item;
       if (item.total_net_flow_usd < min.total_net_flow_usd) min = item;
     }
     return { largestInflow: max, largestOutflow: min };
-  }, [summaryRows]);
+  }, [summaryRowsDesc]);
 
   const dominantIssuer = topIssuers && topIssuers.length > 0 ? topIssuers[0] : null;
 
@@ -189,10 +191,81 @@ export default function EtfPage() {
   const latestIssuerPoint = issuerComparison.length > 0 ? issuerComparison[issuerComparison.length - 1] : null;
   const latestProductPoint = productComparison.length > 0 ? productComparison[productComparison.length - 1] : null;
   const signalRows = React.useMemo(() => {
-    return summaryRows
+    return summaryRowsDesc
       .filter((row) => row.flow_shock || row.price_divergence)
       .slice(0, 10);
-  }, [summaryRows]);
+  }, [summaryRowsDesc]);
+
+  const concentrationSeries = React.useMemo(() => {
+    return summaryRowsAsc.map((row) => ({
+      date: row.date,
+      top1: row.issuer_concentration_top1 !== null && row.issuer_concentration_top1 !== undefined
+        ? row.issuer_concentration_top1 * 100
+        : null,
+      top3: row.issuer_concentration_top3 !== null && row.issuer_concentration_top3 !== undefined
+        ? row.issuer_concentration_top3 * 100
+        : null,
+    }));
+  }, [summaryRowsAsc]);
+
+  const dataIntegrity = React.useMemo(() => {
+    if (summaryRowsDesc.length === 0) {
+      return { duplicateDates: 0, missingPrice: 0, cumulativeDrift: null as number | null };
+    }
+
+    const seen = new Set<string>();
+    let duplicates = 0;
+    let missingPrice = 0;
+    for (const row of summaryRowsDesc) {
+      if (seen.has(row.date)) duplicates += 1;
+      seen.add(row.date);
+      if (row.btc_close === null || row.btc_close === undefined) missingPrice += 1;
+    }
+
+    let cumulative = 0;
+    const asc = [...summaryRowsDesc].reverse();
+    for (const row of asc) cumulative += row.total_net_flow_usd || 0;
+    const latestCum = asc[asc.length - 1]?.cumulative_flow_usd;
+    const drift = latestCum === null || latestCum === undefined ? null : Math.abs(cumulative - latestCum);
+
+    return { duplicateDates: duplicates, missingPrice, cumulativeDrift: drift };
+  }, [summaryRowsDesc]);
+
+  const weeklyDivergenceRows = React.useMemo(() => {
+    if (!analytics?.meta.weekly_divergence) return [];
+    return [...analytics.meta.weekly_divergence]
+      .sort((a, b) => new Date(b.week_start).getTime() - new Date(a.week_start).getTime())
+      .slice(0, 8);
+  }, [analytics?.meta.weekly_divergence]);
+
+  const latestProductBreadth = React.useMemo(() => {
+    if (!products || products.length === 0) return null;
+    const latestDate = products[0]?.date;
+    const sameDay = products.filter((p) => p.date === latestDate);
+    if (sameDay.length === 0) return null;
+    const positives = sameDay.filter((p) => (p.net_flow_usd || 0) > 0).length;
+    const negatives = sameDay.filter((p) => (p.net_flow_usd || 0) < 0).length;
+    const ratio = (positives / sameDay.length) * 100;
+    return { date: latestDate, positives, negatives, total: sameDay.length, ratio };
+  }, [products]);
+
+  const etfRegime = React.useMemo(() => {
+    if (!latestRow) return { label: 'No Data', tone: 'text-gray-400 border-gray-700', note: 'Waiting for latest ETF flow data' };
+    const z = latestRow.flow_zscore ?? 0;
+    const flow = latestRow.total_net_flow_usd;
+    const conc = latestRow.issuer_concentration_top1 ?? 0;
+
+    if (flow > 0 && z >= 1.5 && conc < 0.55) {
+      return { label: 'Broad Risk-On', tone: 'text-green-400 border-green-500/30', note: 'Inflow strong and issuer concentration contained' };
+    }
+    if (flow > 0 && conc >= 0.65) {
+      return { label: 'Narrow Risk-On', tone: 'text-amber-400 border-amber-500/30', note: 'Inflow depends on few issuers, breadth risk rising' };
+    }
+    if (flow < 0 && z <= -1.5) {
+      return { label: 'Risk-Off', tone: 'text-red-400 border-red-500/30', note: 'Strong outflow impulse, defensive posture preferred' };
+    }
+    return { label: 'Mixed', tone: 'text-blue-400 border-blue-500/30', note: 'No dominant ETF regime signal today' };
+  }, [latestRow]);
 
   return (
     <div className="max-w-[1600px] mx-auto space-y-6 animate-in fade-in duration-700">
@@ -258,6 +331,34 @@ export default function EtfPage() {
         </div>
       </div>
 
+      {(analyticsError || productsError || issuersError) && (
+        <div className="card border-red-500/30 bg-red-500/10 p-4">
+          <div className="text-sm font-bold text-red-400">Partial data load failure</div>
+          <div className="text-xs text-red-200 mt-1">
+            Some ETF modules failed to load. Try refresh and check API collector logs if this persists.
+          </div>
+        </div>
+      )}
+
+      {analytics?.meta.quality_status === 'stale' && (
+        <div className="card border-red-500/30 bg-red-500/10 p-4">
+          <div className="text-sm font-bold text-red-400">Data stale warning</div>
+          <div className="text-xs text-red-200 mt-1">
+            ETF feed is stale ({analytics.meta.staleness_hours?.toFixed(1) ?? 'N/A'}h). Treat signals as low confidence.
+          </div>
+        </div>
+      )}
+
+      <div className={`card p-4 border ${etfRegime.tone}`}>
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+          <div>
+            <div className="text-[10px] uppercase tracking-widest text-gray-500">ETF Regime</div>
+            <div className={`text-lg font-black ${etfRegime.tone.split(' ')[0]}`}>{etfRegime.label}</div>
+          </div>
+          <div className="text-sm text-gray-300">{etfRegime.note}</div>
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-4">
         <div className={`stat-card ${latestFlow >= 0 ? 'glow-green' : 'glow-red'}`}>
           <div className="stat-label">Latest Daily Flow</div>
@@ -314,6 +415,17 @@ export default function EtfPage() {
             Top3 {latestRow?.issuer_concentration_top3 ? `${(latestRow.issuer_concentration_top3 * 100).toFixed(1)}%` : 'N/A'}
           </div>
         </div>
+        <div className="stat-card">
+          <div className="stat-label">Flow Breadth</div>
+          <div className="stat-value text-gray-100">
+            {latestProductBreadth ? `${latestProductBreadth.ratio.toFixed(0)}%` : 'N/A'}
+          </div>
+          <div className="text-xs text-gray-500 mt-1">
+            {latestProductBreadth
+              ? `${latestProductBreadth.positives}/${latestProductBreadth.total} positive products`
+              : 'No product breadth data'}
+          </div>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
@@ -332,7 +444,7 @@ export default function EtfPage() {
               <div className="h-56 bg-gray-800/30 rounded animate-pulse"></div>
             ) : (
               <ResponsiveContainer width="100%" height={260}>
-                <ComposedChart data={summaryRowsDesc}>
+                <ComposedChart data={summaryRowsAsc}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
                   <XAxis
                     dataKey="date"
@@ -522,7 +634,7 @@ export default function EtfPage() {
               <div className="h-56 bg-gray-800/30 rounded animate-pulse"></div>
             ) : (
               <ResponsiveContainer width="100%" height={240}>
-                <BarChart data={summaryRowsDesc}>
+                <BarChart data={summaryRowsAsc}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
                   <XAxis
                     dataKey="date"
@@ -549,7 +661,7 @@ export default function EtfPage() {
               <div className="h-56 bg-gray-800/30 rounded animate-pulse"></div>
             ) : (
               <ResponsiveContainer width="100%" height={240}>
-                <LineChart data={summaryRowsDesc}>
+                <LineChart data={summaryRowsAsc}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
                   <XAxis
                     dataKey="date"
@@ -576,7 +688,7 @@ export default function EtfPage() {
               <div className="h-56 bg-gray-800/30 rounded animate-pulse"></div>
             ) : (
               <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={summaryRowsDesc}>
+                <BarChart data={summaryRowsAsc}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
                   <XAxis
                     dataKey="date"
@@ -596,6 +708,36 @@ export default function EtfPage() {
                   <ReferenceLine y={-2} stroke="#F59E0B" strokeDasharray="4 4" />
                 </BarChart>
               </ResponsiveContainer>
+            )}
+          </div>
+
+          <div className="card p-6">
+            <h3 className="text-sm font-semibold text-gray-400 mb-3">Issuer Concentration Trend</h3>
+            {analyticsLoading ? (
+              <div className="h-48 bg-gray-800/30 rounded animate-pulse"></div>
+            ) : concentrationSeries.length > 0 ? (
+              <ResponsiveContainer width="100%" height={220}>
+                <LineChart data={concentrationSeries}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                  <XAxis
+                    dataKey="date"
+                    stroke="#9CA3AF"
+                    fontSize={12}
+                    tickFormatter={(value) =>
+                      new Date(value).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                    }
+                  />
+                  <YAxis stroke="#9CA3AF" fontSize={12} tickFormatter={(value) => `${Number(value).toFixed(0)}%`} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#1F2937', border: '1px solid #374151' }}
+                    formatter={(value: number | undefined) => (value !== undefined ? `${value.toFixed(1)}%` : 'N/A')}
+                  />
+                  <Line type="monotone" dataKey="top1" stroke="#F59E0B" strokeWidth={2} dot={false} name="Top1" />
+                  <Line type="monotone" dataKey="top3" stroke="#22D3EE" strokeWidth={2} dot={false} name="Top3" />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="text-center text-gray-500 py-6">No concentration trend data</div>
             )}
           </div>
 
@@ -634,6 +776,24 @@ export default function EtfPage() {
               <div className="text-center text-gray-500 py-6">No active signals</div>
             )}
           </div>
+
+          <div className="card p-6">
+            <h3 className="text-sm font-semibold text-gray-400 mb-3">Weekly Divergence Monitor</h3>
+            {weeklyDivergenceRows.length > 0 ? (
+              <div className="space-y-2 text-sm">
+                {weeklyDivergenceRows.map((row) => (
+                  <div key={row.week_start} className="flex items-center justify-between border-b border-gray-800/60 pb-2">
+                    <span className="text-gray-400">{row.week_start}</span>
+                    <span className={`font-bold ${row.divergence_usd >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                      {formatCurrency(row.divergence_usd)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center text-gray-500 py-6">No weekly divergence data</div>
+            )}
+          </div>
         </div>
 
         <div className="space-y-6">
@@ -663,6 +823,36 @@ export default function EtfPage() {
                 {analytics.meta.staleness_hours.toFixed(1)}h since last update
               </div>
             )}
+          </div>
+
+          <div className="card p-6">
+            <h3 className="text-sm font-semibold text-gray-400 mb-3">Data Integrity Check</h3>
+            <div className="space-y-3 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-gray-500">Duplicate Dates</span>
+                <span className={`font-semibold ${dataIntegrity.duplicateDates > 0 ? 'text-amber-400' : 'text-gray-300'}`}>
+                  {dataIntegrity.duplicateDates}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-500">Missing BTC Close</span>
+                <span className={`font-semibold ${dataIntegrity.missingPrice > 0 ? 'text-amber-400' : 'text-gray-300'}`}>
+                  {dataIntegrity.missingPrice}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-500">Cumulative Drift</span>
+                <span
+                  className={`font-semibold ${
+                    dataIntegrity.cumulativeDrift !== null && dataIntegrity.cumulativeDrift > 5_000_000
+                      ? 'text-red-400'
+                      : 'text-gray-300'
+                  }`}
+                >
+                  {dataIntegrity.cumulativeDrift === null ? 'N/A' : formatCurrency(dataIntegrity.cumulativeDrift)}
+                </span>
+              </div>
+            </div>
           </div>
 
           <div className="card p-6">

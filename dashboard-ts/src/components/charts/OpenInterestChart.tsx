@@ -8,6 +8,7 @@ import {
   type IChartApi,
   type ISeriesApi,
   type UTCTimestamp,
+  type Time,
   type AreaData
 } from 'lightweight-charts'
 import type { OpenInterest } from '@/types/market'
@@ -15,10 +16,30 @@ import type { OpenInterest } from '@/types/market'
 interface Props {
   data: OpenInterest[]
   onChartCreate?: (chart: IChartApi) => void
+  timeframe?: string
   key?: string 
 }
 
-export function OpenInterestChart({ data, onChartCreate, key }: Props) {
+const formatTickLabel = (time: Time, timeframe: string) => {
+  const timestampMs = typeof time === 'number'
+    ? time * 1000
+    : (typeof time === 'string'
+      ? Date.parse(time)
+      : new Date(time.year, time.month - 1, time.day).getTime())
+
+  const date = new Date(timestampMs)
+  if (Number.isNaN(date.getTime())) return ''
+
+  if (timeframe === '1d') {
+    return date.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit' })
+  }
+  if (timeframe === '4h' || timeframe === '1h') {
+    return date.toLocaleString('en-US', { month: '2-digit', day: '2-digit', hour: '2-digit', hour12: false })
+  }
+  return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
+export function OpenInterestChart({ data, onChartCreate, timeframe = '1h', key }: Props) {
   const chartContainerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const oiSeriesRef = useRef<any>(null) // 使用 any 確保 setMarkers 等方法可用
@@ -49,6 +70,8 @@ export function OpenInterestChart({ data, onChartCreate, key }: Props) {
       timeScale: {
         borderColor: '#374151',
         timeVisible: true,
+        secondsVisible: false,
+        tickMarkFormatter: (time: Time) => formatTickLabel(time, timeframe),
       },
       rightPriceScale: {
         visible: true,
@@ -92,7 +115,7 @@ export function OpenInterestChart({ data, onChartCreate, key }: Props) {
         chartRef.current = null
       }
     }
-  }, [key]) 
+  }, [key, timeframe]) 
 
   useEffect(() => {
     const series = oiSeriesRef.current;

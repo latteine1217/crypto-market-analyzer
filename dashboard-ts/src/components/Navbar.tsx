@@ -10,7 +10,6 @@ export function Navbar() {
   const [isMenuOpen, setIsMenuOpen] = useState(false)
 
   const links = [
-    { href: '/', label: 'Home' },
     { href: '/technical', label: 'Technical' },
     { href: '/liquidity', label: 'Liquidity' },
     { href: '/etf', label: 'ETF' },
@@ -22,7 +21,7 @@ export function Navbar() {
     <nav className="border-b border-gray-800 bg-gray-900/50 backdrop-blur-sm sticky top-0 z-50">
       <div className="container mx-auto px-4">
         <div className="flex items-center justify-between h-16">
-          <Link href="/" className="text-xl font-bold flex items-center gap-2" onClick={() => setIsMenuOpen(false)}>
+          <Link href="/technical" className="text-xl font-bold flex items-center gap-2" onClick={() => setIsMenuOpen(false)}>
             <span>Crypto Dashboard</span>
           </Link>
 
