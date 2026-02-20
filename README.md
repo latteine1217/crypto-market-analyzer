@@ -7,6 +7,24 @@
 - Next.js 交易監看面板
 - 多時框訊號監測（短線 + 波段）
 
+## 近期累積變更摘要（2026 Q1）
+
+- Dashboard 導覽重心改為 `/technical`，首頁改為直接導流，降低維護面積與資訊噪音
+- Technical 頁面強化：
+  - 新增 `VPVR`（Visible Range Volume Profile）與 `Williams Fractal` 指標切換
+  - 支援 POC 區間標註、分型 marker、可視區間 fallback 計算
+  - Sidebar 改為高訊噪比 `Market Intel`（Regime、Fear & Greed、MACD/RSI 判讀）
+- Liquidity 頁面強化：
+  - 補上 `Order Size` 視覺化面板
+  - 新增 `Liquidity Regime`、`Spread (bps)`、`Bid/Ask Skew`
+  - Orderbook 深度檔位切換（`20/50/100`）與狀態資訊可觀測化
+- ETF 頁面強化：
+  - 新增 `ETF Regime`、`Flow Breadth`、`Issuer Concentration Trend`
+  - 新增 stale banner 與 data integrity 檢查（Duplicate Dates / Missing BTC Close / Drift）
+- Collector / API 清理與穩定性優化：
+  - 移除未接線孤立模組與錯置產物（降低來源樹污染）
+  - 修正部分資料鏈路與指標顯示問題，改善回退與容錯行為
+
 ## 核心定位
 
 - 交易所範圍：目前以 `bybit` 為主
@@ -121,4 +139,4 @@ ETF flow 資料目前來源為 Farside（網頁表格解析後寫入 `global_ind
 
 ---
 
-最後更新：2026-02-13
+最後更新：2026-02-20
